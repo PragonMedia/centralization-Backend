@@ -1,0 +1,174 @@
+[
+  {
+    "domain": "paragonmedia.com",
+    "createdBy": "jake@paragonmedia.io",
+    "routes": [
+      {
+        "route": "/landing-page",
+        "template": "pgnm-chatbot-groceries",
+        "organization": "paragon media",
+        "rtkID": "rtk_paragon_001",
+        "ringbaID": "ringba_paragon_001",
+        "phoneNumber": "+1 (555) 123-4567",
+        "createdBy": "jake@paragonmedia.io",
+        "createdAt": "2024-01-15T10:00:00.000Z",
+        "updatedAt": "2024-01-15T10:00:00.000Z"
+      },
+      {
+        "route": "/offer-page",
+        "template": "pgnm-ss",
+        "organization": "paragon media",
+        "rtkID": "rtk_paragon_002",
+        "ringbaID": "ringba_paragon_002",
+        "phoneNumber": "+1 (555) 123-4568",
+        "createdBy": "addy@paragonmedia.io",
+        "createdAt": "2024-01-16T11:00:00.000Z",
+        "updatedAt": "2024-01-16T11:00:00.000Z"
+      },
+      {
+        "route": "/quiz-page",
+        "template": "pgnm-quiz-ss",
+        "organization": "paragon media",
+        "rtkID": "rtk_paragon_003",
+        "ringbaID": "ringba_paragon_003",
+        "phoneNumber": "+1 (555) 123-4569",
+        "createdBy": "jake@paragonmedia.io",
+        "createdAt": "2024-01-17T12:00:00.000Z",
+        "updatedAt": "2024-01-17T12:00:00.000Z"
+      }
+    ],
+    "createdAt": "2024-01-15T10:00:00.000Z",
+    "updatedAt": "2024-01-17T12:00:00.000Z"
+  },
+  {
+    "domain": "eliteoffer.com",
+    "createdBy": "jake@paragonmedia.io",
+    "routes": [
+      {
+        "route": "/vip-access",
+        "template": "pgnm-general-quiz",
+        "organization": "elite",
+        "rtkID": "rtk_elite_001",
+        "ringbaID": "ringba_elite_001",
+        "phoneNumber": "+1 (555) 999-8888",
+        "createdBy": "jake@paragonmedia.io",
+        "createdAt": "2024-01-10T09:00:00.000Z",
+        "updatedAt": "2024-01-10T09:00:00.000Z"
+      },
+      {
+        "route": "/premium-deal",
+        "template": "pgnm-grocery-quiz",
+        "organization": "elite",
+        "rtkID": "rtk_elite_002",
+        "ringbaID": "ringba_elite_002",
+        "phoneNumber": "+1 (555) 999-8889",
+        "createdBy": "addy@paragonmedia.io",
+        "createdAt": "2024-01-12T14:00:00.000Z",
+        "updatedAt": "2024-01-12T14:00:00.000Z"
+      },
+      {
+        "route": "/exclusive-offer",
+        "template": "pgnm-chatbot-groceries",
+        "organization": "elite",
+        "rtkID": "rtk_elite_003",
+        "ringbaID": "ringba_elite_003",
+        "phoneNumber": "+1 (555) 999-8890",
+        "createdBy": "jake@paragonmedia.io",
+        "createdAt": "2024-01-14T16:00:00.000Z",
+        "updatedAt": "2024-01-14T16:00:00.000Z"
+      }
+    ],
+    "createdAt": "2024-01-10T09:00:00.000Z",
+    "updatedAt": "2024-01-14T16:00:00.000Z"
+  },
+  {
+    "domain": "fluentconversion.com",
+    "createdBy": "addy@paragonmedia.io",
+    "routes": [
+      {
+        "route": "/conversion-funnel",
+        "template": "flnt-chatbot-groceries",
+        "organization": "fluent",
+        "rtkID": "rtk_fluent_001",
+        "ringbaID": "ringba_fluent_001",
+        "phoneNumber": "+1 (555) 777-6666",
+        "createdBy": "addy@paragonmedia.io",
+        "createdAt": "2024-01-08T08:00:00.000Z",
+        "updatedAt": "2024-01-08T08:00:00.000Z"
+      },
+      {
+        "route": "/lead-capture",
+        "template": "flnt-chatbot-utility",
+        "organization": "fluent",
+        "rtkID": "rtk_fluent_002",
+        "ringbaID": "ringba_fluent_002",
+        "phoneNumber": "+1 (555) 777-6667",
+        "createdBy": "jake@paragonmedia.io",
+        "createdAt": "2024-01-09T12:00:00.000Z",
+        "updatedAt": "2024-01-09T12:00:00.000Z"
+      },
+      {
+        "route": "/utility-offer",
+        "template": "flnt-chatbot-ss",
+        "organization": "fluent",
+        "rtkID": "rtk_fluent_003",
+        "ringbaID": "ringba_fluent_003",
+        "phoneNumber": "+1 (555) 777-6668",
+        "createdBy": "addy@paragonmedia.io",
+        "createdAt": "2024-01-10T10:00:00.000Z",
+        "updatedAt": "2024-01-10T10:00:00.000Z"
+      }
+    ],
+    "createdAt": "2024-01-08T08:00:00.000Z",
+    "updatedAt": "2024-01-10T10:00:00.000Z"
+  },
+  {
+    "domain": "testdomain.com",
+    "createdBy": "jake@paragonmedia.io",
+    "routes": [
+      {
+        "route": "/test-route",
+        "template": "pgnm-ss",
+        "organization": "paragon media",
+        "rtkID": "rtk_test_001",
+        "ringbaID": "ringba_test_001",
+        "phoneNumber": "+1 (555) 111-2222",
+        "createdBy": "jake@paragonmedia.io",
+        "createdAt": "2024-01-20T10:00:00.000Z",
+        "updatedAt": "2024-01-20T10:00:00.000Z"
+      }
+    ],
+    "createdAt": "2024-01-20T10:00:00.000Z",
+    "updatedAt": "2024-01-20T10:00:00.000Z"
+  },
+  {
+    "domain": "demo.com",
+    "createdBy": "addy@paragonmedia.io",
+    "routes": [
+      {
+        "route": "/demo-page",
+        "template": "flnt-quiz-ss",
+        "organization": "elite",
+        "rtkID": "rtk_demo_001",
+        "ringbaID": "ringba_demo_001",
+        "phoneNumber": "+1 (555) 333-4444",
+        "createdBy": "addy@paragonmedia.io",
+        "createdAt": "2024-01-18T15:00:00.000Z",
+        "updatedAt": "2024-01-18T15:00:00.000Z"
+      },
+      {
+        "route": "/demo-offer",
+        "template": "flnt-grocery-quiz",
+        "organization": "elite",
+        "rtkID": "rtk_demo_002",
+        "ringbaID": "ringba_demo_002",
+        "phoneNumber": "+1 (555) 333-4445",
+        "createdBy": "jake@paragonmedia.io",
+        "createdAt": "2024-01-19T13:00:00.000Z",
+        "updatedAt": "2024-01-19T13:00:00.000Z"
+      }
+    ],
+    "createdAt": "2024-01-18T15:00:00.000Z",
+    "updatedAt": "2024-01-19T13:00:00.000Z"
+  }
+]
