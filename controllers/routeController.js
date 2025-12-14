@@ -363,33 +363,35 @@ exports.createDomain = async (req, res) => {
       );
       console.log(`✅ DNS A record resolves to ${CLOUDFLARE_CONFIG.SERVER_IP}`);
 
-      // 8) Request SSL certificate from origin (your internal cert endpoint)
+      // 8) Request SSL certificate from origin (Certbot via internal endpoint)
       console.log(
         `🔄 STEP 8 — Requesting Let's Encrypt certificate for ${sanitizedDomain}`
       );
 
-      // keep your existing requestOriginSSLCertificate function call, but call it now
       const sslRequestResult = await requestOriginSSLCertificate(
         sanitizedDomain
       );
 
       if (!sslRequestResult.success) {
         const errorMsg = `SSL certificate request failed: ${
-          sslRequestResult.error || "Unknown error"
+          sslRequestResult.message || sslRequestResult.error || "Unknown error"
         }`;
         console.error(`❌ ${errorMsg}`);
         throw new Error(errorMsg);
       }
       console.log(`✅ SSL certificate request successful`);
 
-      // 9) Wait for SSL activation via Cloudflare or local filesystem
-      console.log(`🔄 STEP 9 — Waiting for SSL activation (max 5 minutes)`);
-      const SSL_TIMEOUT = 5 * 60 * 1000;
-      await cloudflareService.waitForSSLActivation(
-        sanitizedDomain,
-        SSL_TIMEOUT
+      // 9) Verify HTTPS is working (Certbot-based verification)
+      console.log(
+        `🔄 STEP 9 — Verifying HTTPS is active for ${sanitizedDomain}`
       );
-      console.log(`✅ SSL active for ${sanitizedDomain}`);
+      const httpsVerified = await verifyHTTPS(sanitizedDomain);
+      if (!httpsVerified) {
+        throw new Error(
+          `HTTPS verification failed: Certificate issued but HTTPS connection not working`
+        );
+      }
+      console.log(`✅ HTTPS verified and active for ${sanitizedDomain}`);
 
       // 10) Enable Cloudflare proxy for ALL DNS records (root, www, wildcard, CNAME) after SSL is active
       console.log(
@@ -420,7 +422,8 @@ exports.createDomain = async (req, res) => {
       console.log(`✅ nginx HTTPS fragment ready`);
 
       // 13) Add domain to RedTrack (if configured)
-      // IMPORTANT: This must happen AFTER proxy is enabled, as RedTrack requires proxied CNAME
+      // IMPORTANT: This must happen AFTER proxy is enabled for main domain
+      // NOTE: RedTrack CNAME (trk.*) must remain DNS-only (not proxied) for RedTrack DNS verification
       if (redtrackDedicatedDomain) {
         console.log(
           `🔄 STEP 13 — Registering domain with RedTrack: ${sanitizedDomain}`
@@ -543,6 +546,81 @@ exports.createDomain = async (req, res) => {
         // Throw error - SSL is required for RedTrack
         throw new Error(`SSL certificate request failed: ${error.message}`);
       }
+    }
+
+    // Helper function to verify HTTPS is working (Certbot-based verification)
+    async function verifyHTTPS(domain, maxRetries = 10, retryDelay = 3000) {
+      const https = require("https");
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const result = await new Promise((resolve, reject) => {
+            const options = {
+              hostname: domain,
+              port: 443,
+              method: "GET",
+              path: "/",
+              rejectUnauthorized: true, // Verify certificate
+              timeout: 5000,
+            };
+
+            const req = https.request(options, (res) => {
+              const cert = res.socket.getPeerCertificate();
+
+              if (cert && cert.valid_to) {
+                const expiresAt = new Date(cert.valid_to);
+                const now = new Date();
+                const expired = now > expiresAt;
+
+                if (!expired && res.statusCode >= 200 && res.statusCode < 400) {
+                  console.log(
+                    `✅ HTTPS verified: ${domain} (Status: ${
+                      res.statusCode
+                    }, Issuer: ${cert.issuer?.CN || "Unknown"})`
+                  );
+                  resolve(true);
+                } else {
+                  reject(
+                    new Error(
+                      `Certificate expired or invalid status: ${res.statusCode}`
+                    )
+                  );
+                }
+              } else {
+                reject(new Error("No certificate found"));
+              }
+            });
+
+            req.on("error", (error) => {
+              reject(error);
+            });
+
+            req.on("timeout", () => {
+              req.destroy();
+              reject(new Error("HTTPS verification timeout"));
+            });
+
+            req.end();
+          });
+
+          return result;
+        } catch (error) {
+          if (attempt >= maxRetries) {
+            console.error(
+              `❌ HTTPS verification failed after ${maxRetries} attempts:`,
+              error.message
+            );
+            return false;
+          }
+          console.log(
+            `⏳ HTTPS verification attempt ${attempt}/${maxRetries} failed, retrying in ${retryDelay}ms... (${error.message})`
+          );
+          // Wait before retry
+          await new Promise((resolve) => setTimeout(resolve, retryDelay));
+        }
+      }
+
+      return false;
     }
 
     // 14. Update domain record with final integration data

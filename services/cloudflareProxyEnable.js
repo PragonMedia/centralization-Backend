@@ -33,12 +33,20 @@ async function enableProxyForDomain(domain) {
     const records = recRes.data?.result || [];
     console.log(`📋 Found ${records.length} DNS record(s) for ${domain}`);
 
-    // 3. Update all records to proxied:true (except NS records)
+    // 3. Update all records to proxied:true (except NS records and trk.* records)
     const updatePromises = [];
     for (const rec of records) {
       // Skip NS records (nameservers cannot be proxied)
       if (rec.type === "NS") {
         console.log(`⏭️  Skipping NS record: ${rec.name}`);
+        continue;
+      }
+
+      // Skip trk.* records (RedTrack CNAME must remain DNS-only)
+      if (rec.name.startsWith("trk.")) {
+        console.log(
+          `⏭️  Skipping trk.* record: ${rec.name} (${rec.type}) - RedTrack CNAME must remain DNS-only`
+        );
         continue;
       }
 

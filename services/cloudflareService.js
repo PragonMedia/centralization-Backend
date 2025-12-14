@@ -160,7 +160,7 @@ async function setARecord(zoneId, domain, serverIP) {
       // Get existing A records for this name
       // For "@", we need to search by the actual domain name
       const searchName = name === "@" ? domain : name;
-      
+
       const response = await axios.get(
         `${CLOUDFLARE_CONFIG.BASE_URL}/zones/${zoneId}/dns_records`,
         {
@@ -176,11 +176,10 @@ async function setARecord(zoneId, domain, serverIP) {
 
       const existingRecords = response.data.result || [];
       // For "@" records, Cloudflare returns the full domain name, so we need to match by domain
-      const existingRecord = existingRecords.find(
-        (record) => 
-          name === "@" 
-            ? (record.name === domain || record.name === "@")
-            : record.name === name
+      const existingRecord = existingRecords.find((record) =>
+        name === "@"
+          ? record.name === domain || record.name === "@"
+          : record.name === name
       );
 
       const payload = {
@@ -475,78 +474,6 @@ async function enableProxy(zoneId, domain) {
 }
 
 /**
- * Check SSL status on origin server
- * @param {string} domain - Domain name
- * @returns {Promise<object>}
- */
-async function checkSSLStatus(domain) {
-  try {
-    // Call your internal endpoint to check SSL certificate status on origin server
-    // This endpoint should check if Let's Encrypt certificate exists and is valid
-    const response = await axios.get(
-      `${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}/api/v1/ssl/status`,
-      {
-        params: { domain },
-        headers: {
-          Authorization: `Bearer ${CLOUDFLARE_CONFIG.INTERNAL_API_TOKEN}`,
-        },
-      }
-    );
-
-    return {
-      active: response.data.active || false,
-      expiresAt: response.data.expiresAt,
-      issuer: response.data.issuer,
-      status: response.data.status, // 'active', 'pending', 'expired', 'error'
-    };
-  } catch (error) {
-    console.error("Error checking SSL status on origin:", error);
-    throw new Error(`Failed to check SSL status: ${error.message}`);
-  }
-}
-
-/**
- * Wait for SSL activation on origin server
- * @param {string} domain - Domain name
- * @param {number} maxWaitTime - Maximum wait time in milliseconds
- * @returns {Promise<boolean>}
- */
-async function waitForSSLActivation(domain, maxWaitTime = null) {
-  const timeout = maxWaitTime || CLOUDFLARE_CONFIG.SSL_TIMEOUT;
-  const pollInterval = CLOUDFLARE_CONFIG.POLL_INTERVAL;
-  const startTime = Date.now();
-
-  while (Date.now() - startTime < timeout) {
-    try {
-      const sslStatus = await checkSSLStatus(domain);
-
-      // Check if SSL certificate is active on origin server
-      if (sslStatus.active && sslStatus.status === "active") {
-        console.log(`✅ SSL certificate is active for ${domain}`);
-        return true;
-      }
-
-      // Wait before next check
-      const elapsed = Math.round((Date.now() - startTime) / 1000);
-      console.log(
-        `⏳ Waiting for SSL activation... (${elapsed}s) - Status: ${
-          sslStatus.status || "pending"
-        }`
-      );
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
-    } catch (error) {
-      console.error("Error checking SSL status:", error);
-      // Continue polling despite errors
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
-    }
-  }
-
-  throw new Error(
-    `SSL certificate activation timeout after ${timeout / 1000} seconds`
-  );
-}
-
-/**
  * Delete DNS records we created for a domain
  * @param {string} zoneId - Cloudflare zone ID
  * @param {string} domain - Domain name
@@ -573,7 +500,9 @@ async function deleteDNSRecords(zoneId, domain) {
       (record) =>
         // A records for root (as "@" or domain name) and wildcard pointing to our server IP
         ["A", "AAAA"].includes(record.type) &&
-        (record.name === domain || record.name === "@" || record.name === `*.${domain}`) &&
+        (record.name === domain ||
+          record.name === "@" ||
+          record.name === `*.${domain}`) &&
         record.content === CLOUDFLARE_CONFIG.SERVER_IP
     );
 
@@ -614,7 +543,5 @@ module.exports = {
   createRedTrackCNAME,
   setSSLMode,
   enableProxy,
-  checkSSLStatus,
-  waitForSSLActivation,
   deleteDNSRecords,
 };
