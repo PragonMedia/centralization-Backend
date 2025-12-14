@@ -134,46 +134,78 @@ exports.getDomainNames = async (req, res) => {
 
 // CREATE A NEW DOMAIN (without routes)
 exports.createDomain = async (req, res) => {
-  const {
-    domain,
-    assignedTo,
-    organization,
-    id,
-    platform,
-    rtkID,
-    certificationTags,
-  } = req.body;
+  console.log("🚀 STEP 0 — Domain creation request received");
+  console.log("📥 Request body:", JSON.stringify(req.body, null, 2));
+
+  let sanitizedDomain = null;
 
   try {
+    const {
+      domain,
+      assignedTo,
+      organization,
+      id,
+      platform,
+      rtkID,
+      certificationTags,
+    } = req.body;
+
+    console.log("🔍 STEP 1 — Validating request body");
+
     // Validate required fields
     if (!domain || !assignedTo || !id || !platform) {
+      const missing = [];
+      if (!domain) missing.push("domain");
+      if (!assignedTo) missing.push("assignedTo");
+      if (!id) missing.push("id");
+      if (!platform) missing.push("platform");
+
+      console.error("❌ Validation failed: Missing required fields:", missing);
       return res.status(400).json({
-        error:
-          "Missing required fields. Required: domain, assignedTo, id, platform",
+        error: "Missing required fields",
+        details: `Required fields missing: ${missing.join(", ")}`,
+        missingFields: missing,
       });
     }
 
     // Validate domain format
     if (typeof domain !== "string" || domain.trim().length === 0) {
-      return res.status(400).json({ error: "Invalid domain name format." });
+      console.error("❌ Validation failed: Invalid domain format");
+      return res.status(400).json({
+        error: "Invalid domain name format",
+        details: "Domain must be a non-empty string",
+      });
     }
 
     // Sanitize domain name (trim whitespace only, keep original case and hyphens)
-    const sanitizedDomain = domain.trim();
+    sanitizedDomain = domain.trim();
+    console.log(`✅ Domain validated: ${sanitizedDomain}`);
 
     // Check if domain already exists
+    console.log(`🔍 STEP 2 — Checking if domain exists in database`);
     const existingDomain = await Domain.findOne({ domain: sanitizedDomain });
     if (existingDomain) {
-      return res.status(400).json({ error: "Domain already exists." });
+      console.error(`❌ Domain already exists: ${sanitizedDomain}`);
+      return res.status(400).json({
+        error: "Domain already exists",
+        details: `Domain ${sanitizedDomain} is already registered`,
+        domain: sanitizedDomain,
+      });
     }
+    console.log(`✅ Domain ${sanitizedDomain} is available`);
 
     // Validate organization if provided
     if (
       organization &&
       !["Elite", "Paragon", "Fluent"].includes(organization)
     ) {
+      console.error(
+        `❌ Validation failed: Invalid organization: ${organization}`
+      );
       return res.status(400).json({
-        error: "Invalid organization. Must be one of: Elite, Paragon, Fluent",
+        error: "Invalid organization",
+        details: "Must be one of: Elite, Paragon, Fluent",
+        provided: organization,
       });
     }
 
@@ -183,22 +215,61 @@ exports.createDomain = async (req, res) => {
         platform
       )
     ) {
+      console.error(`❌ Validation failed: Invalid platform: ${platform}`);
       return res.status(400).json({
-        error:
-          "Invalid platform. Must be one of: Facebook, Google, Liftoff, Bigo, Media Math",
+        error: "Invalid platform",
+        details: "Must be one of: Facebook, Google, Liftoff, Bigo, Media Math",
+        provided: platform,
       });
     }
 
     // Validate certificationTags is an array if provided
     if (certificationTags && !Array.isArray(certificationTags)) {
+      console.error(`❌ Validation failed: certificationTags must be an array`);
       return res.status(400).json({
-        error: "certificationTags must be an array",
+        error: "Invalid certificationTags",
+        details: "certificationTags must be an array",
+        provided: typeof certificationTags,
       });
     }
+
+    // Validate environment variables
+    console.log("🔍 STEP 3 — Validating environment configuration");
+    if (!CLOUDFLARE_CONFIG.API_TOKEN) {
+      console.error("❌ Missing CLOUDFLARE_API_TOKEN");
+      return res.status(500).json({
+        error: "Server configuration error",
+        details: "CLOUDFLARE_API_TOKEN is not configured",
+      });
+    }
+    if (!CLOUDFLARE_CONFIG.SERVER_IP) {
+      console.error("❌ Missing SERVER_IP");
+      return res.status(500).json({
+        error: "Server configuration error",
+        details: "SERVER_IP is not configured",
+      });
+    }
+    if (!CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL) {
+      console.error("❌ Missing INTERNAL_SERVER_URL");
+      return res.status(500).json({
+        error: "Server configuration error",
+        details: "INTERNAL_SERVER_URL is not configured",
+      });
+    }
+    if (!CLOUDFLARE_CONFIG.INTERNAL_API_TOKEN) {
+      console.error("❌ Missing INTERNAL_API_TOKEN");
+      return res.status(500).json({
+        error: "Server configuration error",
+        details: "INTERNAL_API_TOKEN is not configured",
+      });
+    }
+    console.log("✅ Environment configuration validated");
 
     // ============================================
     // CLOUDFLARE & REDTRACK INTEGRATION
     // ============================================
+
+    console.log("🔍 STEP 4 — Starting Cloudflare & RedTrack integration");
 
     let cloudflareZoneId = null;
     let redtrackResult = null;
@@ -206,38 +277,53 @@ exports.createDomain = async (req, res) => {
     const redtrackDedicatedDomain =
       redtrackService.getRedTrackDedicatedDomain();
 
+    console.log(
+      `ℹ️  RedTrack dedicated domain: ${
+        redtrackDedicatedDomain || "Not configured"
+      }`
+    );
+
     try {
       // 1) Get or create Cloudflare zone
-      console.log(`🔄 Getting/Creating Cloudflare zone for ${sanitizedDomain}`);
+      console.log(
+        `🔄 STEP 4.1 — Getting/Creating Cloudflare zone for ${sanitizedDomain}`
+      );
       cloudflareZoneId = await cloudflareService.getZoneId(sanitizedDomain);
+      console.log(`✅ Cloudflare zone ID: ${cloudflareZoneId}`);
 
       // 2) Disable proxy for root + wildcard (required for ACME)
-      console.log(`🔄 Disabling proxy for ${sanitizedDomain}`);
+      console.log(`🔄 STEP 4.2 — Disabling proxy for ${sanitizedDomain}`);
       await cloudflareService.disableProxy(cloudflareZoneId, sanitizedDomain);
+      console.log(`✅ Proxy disabled for ACME validation`);
 
       // 3) Add A records (root + wildcard) -> origin IP
       console.log(
-        `🔄 Setting A records for ${sanitizedDomain} → ${CLOUDFLARE_CONFIG.SERVER_IP}`
+        `🔄 STEP 4.3 — Setting A records for ${sanitizedDomain} → ${CLOUDFLARE_CONFIG.SERVER_IP}`
       );
       await cloudflareService.setARecord(
         cloudflareZoneId,
         sanitizedDomain,
         CLOUDFLARE_CONFIG.SERVER_IP
       );
+      console.log(`✅ A records created`);
 
       // 4) Create RedTrack CNAME early (DNS only, no proxy)
       if (redtrackDedicatedDomain) {
         console.log(
-          `🔄 Creating RedTrack CNAME for ${sanitizedDomain} → ${redtrackDedicatedDomain}`
+          `🔄 STEP 4.4 — Creating RedTrack CNAME for ${sanitizedDomain} → ${redtrackDedicatedDomain}`
         );
         await cloudflareService.createRedTrackCNAME(
           cloudflareZoneId,
           sanitizedDomain,
           redtrackDedicatedDomain
         );
+        console.log(`✅ RedTrack CNAME created`);
+      } else {
+        console.log(`ℹ️  Skipping RedTrack CNAME (not configured)`);
       }
 
       // 5) Create DB record with sslStatus pending, proxy disabled
+      console.log(`🔄 STEP 5 — Creating temporary domain record in database`);
       const tempDomainData = {
         domain: sanitizedDomain,
         assignedTo,
@@ -255,19 +341,19 @@ exports.createDomain = async (req, res) => {
 
       tempDomain = await Domain.create(tempDomainData);
       console.log(
-        `✅ Temporary domain record created for nginx config: ${sanitizedDomain}`
+        `✅ Temporary domain record created: ${sanitizedDomain} (ID: ${tempDomain._id})`
       );
 
       // 6) Generate nginx HTTP fragment for this domain and reload nginx
       console.log(
-        `🔄 Writing nginx fragment for ${sanitizedDomain} and reloading nginx`
+        `🔄 STEP 6 — Writing nginx HTTP fragment for ${sanitizedDomain}`
       );
-      await generateNginxConfig(tempDomain); // writes /etc/nginx/dynamic/<domain>.conf and reloads nginx
+      await generateNginxConfig(tempDomain);
       console.log(`✅ nginx HTTP fragment ready (no SSL yet)`);
 
       // 7) Wait for DNS A records to resolve publicly (simple loop with timeout)
       console.log(
-        `⏳ Waiting for DNS A record for ${sanitizedDomain} to propagate...`
+        `🔄 STEP 7 — Waiting for DNS A record for ${sanitizedDomain} to propagate...`
       );
       const DNS_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
       await waitForDnsARecord(
@@ -279,7 +365,7 @@ exports.createDomain = async (req, res) => {
 
       // 8) Request SSL certificate from origin (your internal cert endpoint)
       console.log(
-        `🔄 Requesting Let's Encrypt certificate for ${sanitizedDomain} (origin)`
+        `🔄 STEP 8 — Requesting Let's Encrypt certificate for ${sanitizedDomain}`
       );
 
       // keep your existing requestOriginSSLCertificate function call, but call it now
@@ -288,15 +374,16 @@ exports.createDomain = async (req, res) => {
       );
 
       if (!sslRequestResult.success) {
-        throw new Error(
-          `SSL certificate request failed: ${
-            sslRequestResult.error || "Unknown error"
-          }`
-        );
+        const errorMsg = `SSL certificate request failed: ${
+          sslRequestResult.error || "Unknown error"
+        }`;
+        console.error(`❌ ${errorMsg}`);
+        throw new Error(errorMsg);
       }
+      console.log(`✅ SSL certificate request successful`);
 
       // 9) Wait for SSL activation via Cloudflare or local filesystem
-      console.log(`⏳ Waiting for SSL activation (max 5 minutes)`);
+      console.log(`🔄 STEP 9 — Waiting for SSL activation (max 5 minutes)`);
       const SSL_TIMEOUT = 5 * 60 * 1000;
       await cloudflareService.waitForSSLActivation(
         sanitizedDomain,
@@ -306,42 +393,63 @@ exports.createDomain = async (req, res) => {
 
       // 10) Enable Cloudflare proxy for ALL DNS records (root, www, wildcard, CNAME) after SSL is active
       console.log(
-        `🌐 Enabling Cloudflare proxy for ALL DNS records: ${sanitizedDomain}`
+        `🔄 STEP 10 — Enabling Cloudflare proxy for ALL DNS records: ${sanitizedDomain}`
       );
       await enableProxyForDomain(sanitizedDomain);
-      console.log(`✅ Cloudflare proxy enabled for all records (orange cloud active)`);
+      console.log(
+        `✅ Cloudflare proxy enabled for all records (orange cloud active)`
+      );
 
       // 11) Set Cloudflare SSL mode to configured mode
       console.log(
-        `🔄 Setting Cloudflare SSL mode to ${CLOUDFLARE_CONFIG.SSL_MODE}`
+        `🔄 STEP 11 — Setting Cloudflare SSL mode to ${CLOUDFLARE_CONFIG.SSL_MODE}`
       );
       await cloudflareService.setSSLMode(
         cloudflareZoneId,
         CLOUDFLARE_CONFIG.SSL_MODE
       );
+      console.log(
+        `✅ Cloudflare SSL mode set to ${CLOUDFLARE_CONFIG.SSL_MODE}`
+      );
 
       // 12) Update nginx fragment (HTTPS fragment now) and reload
-      console.log(
-        `🔄 Regenerating nginx fragment for HTTPS and reloading nginx`
-      );
+      console.log(`🔄 STEP 12 — Regenerating nginx fragment for HTTPS`);
       tempDomain.sslStatus = "active";
       tempDomain.proxyStatus = "enabled";
       await generateNginxConfig(tempDomain);
+      console.log(`✅ nginx HTTPS fragment ready`);
 
       // 13) Add domain to RedTrack (if configured)
       // IMPORTANT: This must happen AFTER proxy is enabled, as RedTrack requires proxied CNAME
       if (redtrackDedicatedDomain) {
-        console.log(`🔄 Registering domain with RedTrack: ${sanitizedDomain}`);
+        console.log(
+          `🔄 STEP 13 — Registering domain with RedTrack: ${sanitizedDomain}`
+        );
         redtrackResult = await redtrackService.addRedTrackDomain(
           sanitizedDomain
         );
         console.log(`✅ RedTrack added: ${redtrackResult.trackingDomain}`);
+      } else {
+        console.log(`ℹ️  Skipping RedTrack registration (not configured)`);
       }
     } catch (integrationError) {
-      console.error(
-        `❌ Integration error for ${sanitizedDomain}:`,
-        integrationError
-      );
+      console.error("=".repeat(80));
+      console.error("❌ DOMAIN CREATION ERROR — Integration failed");
+      console.error("Domain:", sanitizedDomain);
+      console.error("Error name:", integrationError.name);
+      console.error("Error message:", integrationError.message);
+      console.error("Error stack:", integrationError.stack);
+      if (integrationError.response) {
+        console.error(
+          "HTTP Response Status:",
+          integrationError.response.status
+        );
+        console.error(
+          "HTTP Response Data:",
+          JSON.stringify(integrationError.response.data, null, 2)
+        );
+      }
+      console.error("=".repeat(80));
 
       // cleanup DB record if created
       if (tempDomain && tempDomain._id) {
@@ -366,11 +474,20 @@ exports.createDomain = async (req, res) => {
         }
       }
 
-      return res.status(400).json({
+      const errorDetails =
+        integrationError.message || integrationError.toString();
+      const errorResponse = {
         error: "Domain creation failed: Integration error",
-        details: integrationError.message,
+        details: errorDetails,
         domain: sanitizedDomain,
-      });
+      };
+
+      // Add more details if available
+      if (integrationError.response?.data) {
+        errorResponse.apiError = integrationError.response.data;
+      }
+
+      return res.status(400).json(errorResponse);
     }
 
     // Helper function to call origin server SSL endpoint
@@ -428,16 +545,24 @@ exports.createDomain = async (req, res) => {
       }
     }
 
-    // 13. Update domain record with final integration data
+    // 14. Update domain record with final integration data
+    console.log(`🔄 STEP 14 — Saving final domain record to database`);
     tempDomain.sslStatus = "active"; // SSL is active by the time we reach here
     tempDomain.proxyStatus = "enabled"; // Proxy is enabled after SSL activation
     tempDomain.redtrackDomainId = redtrackResult?.domainId || null;
     tempDomain.redtrackTrackingDomain = redtrackResult?.trackingDomain || null;
 
     const newDomain = await tempDomain.save();
-
     console.log(
-      `✅ Domain created successfully: ${sanitizedDomain} (${newDomain.organization}) - ID: ${id} - Assigned to: ${assignedTo}`
+      `✅ Domain saved successfully: ${sanitizedDomain} (${newDomain.organization}) - ID: ${id} - Assigned to: ${assignedTo}`
+    );
+    console.log(
+      `✅ RedTrack Domain ID: ${newDomain.redtrackDomainId || "N/A"}`
+    );
+    console.log(
+      `✅ RedTrack Tracking Domain: ${
+        newDomain.redtrackTrackingDomain || "N/A"
+      }`
     );
 
     // 14. Start background job to monitor SSL (for ongoing monitoring)
@@ -475,16 +600,45 @@ exports.createDomain = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Error creating domain:", err);
+    console.error("=".repeat(80));
+    console.error("❌ DOMAIN CREATION ERROR — Unexpected error");
+    console.error("Error name:", err.name);
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    if (err.response) {
+      console.error("HTTP Response Status:", err.response.status);
+      console.error(
+        "HTTP Response Data:",
+        JSON.stringify(err.response.data, null, 2)
+      );
+    }
+    console.error("=".repeat(80));
 
     if (err.name === "ValidationError") {
+      const validationDetails = Object.values(err.errors).map((e) => e.message);
+      console.error("Validation errors:", validationDetails);
       return res.status(400).json({
-        error: "Invalid domain data.",
-        details: Object.values(err.errors).map((e) => e.message),
+        error: "Invalid domain data",
+        details: validationDetails.join(", "),
+        validationErrors: validationDetails,
       });
     }
 
-    res.status(500).json({ error: "Server error while creating domain." });
+    // Handle MongoDB duplicate key error
+    if (err.name === "MongoServerError" && err.code === 11000) {
+      console.error("Duplicate domain error");
+      return res.status(409).json({
+        error: "Domain already exists",
+        details: "A domain with this name already exists in the database",
+      });
+    }
+
+    const errorDetails = err.message || err.toString();
+    return res.status(500).json({
+      error: "Server error while creating domain",
+      details: errorDetails,
+      ...(process.env.NODE_ENV !== "production" && { stack: err.stack }),
+    });
   }
 };
 

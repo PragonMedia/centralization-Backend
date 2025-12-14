@@ -26,12 +26,9 @@ async function enableProxyForDomain(domain) {
     console.log(`✅ Found zone: ${domain} (${zoneId})`);
 
     // 2. Get all DNS records
-    const recRes = await axios.get(
-      `${baseURL}/zones/${zoneId}/dns_records`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-      }
-    );
+    const recRes = await axios.get(`${baseURL}/zones/${zoneId}/dns_records`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
     const records = recRes.data?.result || [];
     console.log(`📋 Found ${records.length} DNS record(s) for ${domain}`);
@@ -104,4 +101,3 @@ async function enableProxyForDomain(domain) {
 }
 
 module.exports = { enableProxyForDomain };
-
