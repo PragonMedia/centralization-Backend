@@ -16,14 +16,16 @@ async function waitForDnsARecord(name, expectedIp, timeoutMs = 120000) {
   const start = Date.now();
   const pollInterval = 10000; // 10 seconds between checks
   let attempt = 0;
-  
+
   console.log(`⏳ Waiting for DNS to propagate for ${name} → ${expectedIp}`);
-  console.log(`⏳ Timeout: ${timeoutMs / 1000}s, Poll interval: ${pollInterval / 1000}s`);
+  console.log(
+    `⏳ Timeout: ${timeoutMs / 1000}s, Poll interval: ${pollInterval / 1000}s`
+  );
 
   while (Date.now() - start < timeoutMs) {
     attempt++;
     const elapsed = Math.round((Date.now() - start) / 1000);
-    
+
     try {
       // Try multiple DNS resolvers for better reliability
       const resolvers = [
@@ -79,9 +81,7 @@ async function waitForDnsARecord(name, expectedIp, timeoutMs = 120000) {
           `⏳ DNS not yet propagated [${elapsed}s]: Got ${lastResolvedIp}, expecting ${expectedIp}. Waiting...`
         );
       } else {
-        console.log(
-          `⏳ DNS record not found yet [${elapsed}s]. Waiting...`
-        );
+        console.log(`⏳ DNS record not found yet [${elapsed}s]. Waiting...`);
       }
     } catch (err) {
       // DNS query failed entirely, keep polling
