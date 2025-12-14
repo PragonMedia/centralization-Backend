@@ -2,6 +2,7 @@ const Domain = require("../models/domainModel");
 const { generateNginxConfig } = require("../services/dynamicRoutes");
 const cloudflareService = require("../services/cloudflareService");
 const redtrackService = require("../services/redtrackService");
+const { enableProxyForDomain } = require("../services/cloudflareProxyEnable");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 const { monitorSSLAndEnableProxy } = require("../jobs/sslMonitoringJob");
 const axios = require("axios");
@@ -303,9 +304,12 @@ exports.createDomain = async (req, res) => {
       );
       console.log(`✅ SSL active for ${sanitizedDomain}`);
 
-      // 10) Enable Cloudflare proxy only after SSL is active
-      console.log(`🔄 Enabling Cloudflare proxy for ${sanitizedDomain}`);
-      await cloudflareService.enableProxy(cloudflareZoneId, sanitizedDomain);
+      // 10) Enable Cloudflare proxy for ALL DNS records (root, www, wildcard, CNAME) after SSL is active
+      console.log(
+        `🌐 Enabling Cloudflare proxy for ALL DNS records: ${sanitizedDomain}`
+      );
+      await enableProxyForDomain(sanitizedDomain);
+      console.log(`✅ Cloudflare proxy enabled for all records (orange cloud active)`);
 
       // 11) Set Cloudflare SSL mode to configured mode
       console.log(
@@ -325,6 +329,7 @@ exports.createDomain = async (req, res) => {
       await generateNginxConfig(tempDomain);
 
       // 13) Add domain to RedTrack (if configured)
+      // IMPORTANT: This must happen AFTER proxy is enabled, as RedTrack requires proxied CNAME
       if (redtrackDedicatedDomain) {
         console.log(`🔄 Registering domain with RedTrack: ${sanitizedDomain}`);
         redtrackResult = await redtrackService.addRedTrackDomain(
