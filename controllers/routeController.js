@@ -3,90 +3,69 @@ const { generateNginxConfig } = require("../services/dynamicRoutes");
 const cloudflareService = require("../services/cloudflareService");
 const redtrackService = require("../services/redtrackService");
 const { enableProxyForDomain } = require("../services/cloudflareProxyEnable");
+const { dnsResolver } = require("../services/dnsResolver");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 const { monitorSSLAndEnableProxy } = require("../jobs/sslMonitoringJob");
 const axios = require("axios");
-const dns = require("dns").promises;
 
 /**
  * Wait until the public A record of `name` resolves to expectedIp or timeout.
- * Polls DNS resolvers until the A record matches the expected IP.
+ * Uses external DNS resolvers (Cloudflare/Google) to avoid Ubuntu's systemd-resolved cache.
+ * NEVER uses system default resolver to prevent stale DNS cache issues.
  */
-async function waitForDnsARecord(name, expectedIp, timeoutMs = 120000) {
+async function waitForDnsARecord(name, expectedIp, timeoutMs = null) {
+  // Use config values if not provided
+  const timeout = timeoutMs || CLOUDFLARE_CONFIG.DNS_TIMEOUT || 120000;
+  const pollInterval = CLOUDFLARE_CONFIG.DNS_POLL_INTERVAL || 10000;
+  
   const start = Date.now();
-  const pollInterval = 10000; // 10 seconds between checks
   let attempt = 0;
 
   console.log(`⏳ Waiting for DNS to propagate for ${name} → ${expectedIp}`);
-  console.log(
-    `⏳ Timeout: ${timeoutMs / 1000}s, Poll interval: ${pollInterval / 1000}s`
-  );
+  console.log(`⏳ Using external DNS resolvers (Cloudflare/Google) - avoiding system cache`);
+  console.log(`⏳ Timeout: ${timeout / 1000}s, Poll interval: ${pollInterval / 1000}s`);
 
-  while (Date.now() - start < timeoutMs) {
+  while (Date.now() - start < timeout) {
     attempt++;
     const elapsed = Math.round((Date.now() - start) / 1000);
 
     try {
-      // Try multiple DNS resolvers for better reliability
-      const resolvers = [
-        { name: "Cloudflare (1.1.1.1)", resolver: "1.1.1.1" },
-        { name: "Google (8.8.8.8)", resolver: "8.8.8.8" },
-        { name: "System default", resolver: null },
-      ];
+      // Use custom DNS resolver (external servers only, no system cache)
+      const result = await dnsResolver.checkARecord(name, expectedIp);
 
-      let foundMatch = false;
-      let lastResolvedIp = null;
-
-      for (const { name: resolverName, resolver } of resolvers) {
-        try {
-          let addrs;
-          if (resolver) {
-            // Use specific resolver
-            const dnsPromises = require("dns").promises;
-            const resolverInstance = new dnsPromises.Resolver();
-            resolverInstance.setServers([resolver]);
-            addrs = await resolverInstance.resolve4(name);
-          } else {
-            // Use system default
-            addrs = await dns.resolve4(name);
-          }
-
-          if (addrs && addrs.length > 0) {
-            lastResolvedIp = addrs[0];
-            console.log(
-              `🔎 DNS Check (${resolverName}) [Attempt ${attempt}, ${elapsed}s]: ${name} → ${lastResolvedIp}`
-            );
-
-            if (addrs.includes(expectedIp)) {
-              console.log(
-                `✅ DNS propagation confirmed for ${name} → ${expectedIp} (via ${resolverName})`
-              );
-              foundMatch = true;
-              break;
-            }
-          }
-        } catch (err) {
-          // Continue to next resolver if this one fails
-          continue;
-        }
-      }
-
-      if (foundMatch) {
-        return true;
-      }
-
-      // If we got a response but wrong IP, log it
-      if (lastResolvedIp) {
+      if (result.error) {
+        // DNS query failed (NXDOMAIN, timeout, etc.)
         console.log(
-          `⏳ DNS not yet propagated [${elapsed}s]: Got ${lastResolvedIp}, expecting ${expectedIp}. Waiting...`
+          `⚠️ DNS Check [Attempt ${attempt}, ${elapsed}s]: ${name} - Error: ${result.error}`
+        );
+      } else if (result.addresses.length === 0) {
+        // No A records found yet
+        console.log(
+          `⏳ DNS Check [Attempt ${attempt}, ${elapsed}s]: ${name} - No A records found yet (NXDOMAIN or not propagated)`
         );
       } else {
-        console.log(`⏳ DNS record not found yet [${elapsed}s]. Waiting...`);
+        // Got A records, check if they match
+        const allAddresses = result.addresses.join(", ");
+        console.log(
+          `🔎 DNS Check [Attempt ${attempt}, ${elapsed}s]: ${name} → [${allAddresses}]`
+        );
+
+        if (result.match) {
+          console.log(
+            `✅ DNS propagation confirmed for ${name} → ${expectedIp} (found in: [${allAddresses}])`
+          );
+          return true;
+        } else {
+          // Wrong IP(s) returned
+          console.log(
+            `⏳ DNS not yet propagated [${elapsed}s]: Got [${allAddresses}], expecting ${expectedIp}. Waiting...`
+          );
+        }
       }
     } catch (err) {
-      // DNS query failed entirely, keep polling
+      // Unexpected error, log and continue
       console.log(
-        `⚠️ DNS check failed [${elapsed}s], retrying... (${err.message})`
+        `⚠️ DNS check error [${elapsed}s]: ${err.message}. Retrying...`
       );
     }
 
@@ -94,7 +73,7 @@ async function waitForDnsARecord(name, expectedIp, timeoutMs = 120000) {
     await new Promise((r) => setTimeout(r, pollInterval));
   }
 
-  const elapsedSeconds = Math.round(timeoutMs / 1000);
+  const elapsedSeconds = Math.round(timeout / 1000);
   throw new Error(
     `DNS A record for ${name} did not point to ${expectedIp} within ${elapsedSeconds} seconds`
   );

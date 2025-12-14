@@ -7,6 +7,9 @@ const CLOUDFLARE_CONFIG = {
     process.env.INTERNAL_SERVER_URL || "http://localhost:3000",
   INTERNAL_API_TOKEN: process.env.INTERNAL_API_TOKEN || "",
   SSL_MODE: process.env.CLOUDFLARE_SSL_MODE || "full", // full, flexible, strict
+  // DNS Validation Configuration
+  DNS_TIMEOUT: parseInt(process.env.CLOUDFLARE_DNS_TIMEOUT) || 120000, // 2 minutes default
+  DNS_POLL_INTERVAL: parseInt(process.env.CLOUDFLARE_POLL_INTERVAL) || 10000, // 10 seconds default
   // SSH Configuration for remote server access
   SSH_HOST: process.env.SSH_HOST || process.env.SERVER_IP || "",
   SSH_USER: process.env.SSH_USER || "root",
