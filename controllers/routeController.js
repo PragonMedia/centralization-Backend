@@ -17,13 +17,17 @@ async function waitForDnsARecord(name, expectedIp, timeoutMs = null) {
   // Use config values if not provided
   const timeout = timeoutMs || CLOUDFLARE_CONFIG.DNS_TIMEOUT || 120000;
   const pollInterval = CLOUDFLARE_CONFIG.DNS_POLL_INTERVAL || 10000;
-  
+
   const start = Date.now();
   let attempt = 0;
 
   console.log(`⏳ Waiting for DNS to propagate for ${name} → ${expectedIp}`);
-  console.log(`⏳ Using external DNS resolvers (Cloudflare/Google) - avoiding system cache`);
-  console.log(`⏳ Timeout: ${timeout / 1000}s, Poll interval: ${pollInterval / 1000}s`);
+  console.log(
+    `⏳ Using external DNS resolvers (Cloudflare/Google) - avoiding system cache`
+  );
+  console.log(
+    `⏳ Timeout: ${timeout / 1000}s, Poll interval: ${pollInterval / 1000}s`
+  );
 
   while (Date.now() - start < timeout) {
     attempt++;
