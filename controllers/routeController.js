@@ -10,27 +10,93 @@ const dns = require("dns").promises;
 
 /**
  * Wait until the public A record of `name` resolves to expectedIp or timeout.
- * Simple exponential backoff loop.
+ * Polls DNS resolvers until the A record matches the expected IP.
  */
 async function waitForDnsARecord(name, expectedIp, timeoutMs = 120000) {
   const start = Date.now();
+  const pollInterval = 10000; // 10 seconds between checks
   let attempt = 0;
+  
+  console.log(`⏳ Waiting for DNS to propagate for ${name} → ${expectedIp}`);
+  console.log(`⏳ Timeout: ${timeoutMs / 1000}s, Poll interval: ${pollInterval / 1000}s`);
+
   while (Date.now() - start < timeoutMs) {
     attempt++;
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    
     try {
-      const addrs = await dns.resolve4(name);
-      if (addrs && addrs.length && addrs.includes(expectedIp)) {
+      // Try multiple DNS resolvers for better reliability
+      const resolvers = [
+        { name: "Cloudflare (1.1.1.1)", resolver: "1.1.1.1" },
+        { name: "Google (8.8.8.8)", resolver: "8.8.8.8" },
+        { name: "System default", resolver: null },
+      ];
+
+      let foundMatch = false;
+      let lastResolvedIp = null;
+
+      for (const { name: resolverName, resolver } of resolvers) {
+        try {
+          let addrs;
+          if (resolver) {
+            // Use specific resolver
+            const dnsPromises = require("dns").promises;
+            const resolverInstance = new dnsPromises.Resolver();
+            resolverInstance.setServers([resolver]);
+            addrs = await resolverInstance.resolve4(name);
+          } else {
+            // Use system default
+            addrs = await dns.resolve4(name);
+          }
+
+          if (addrs && addrs.length > 0) {
+            lastResolvedIp = addrs[0];
+            console.log(
+              `🔎 DNS Check (${resolverName}) [Attempt ${attempt}, ${elapsed}s]: ${name} → ${lastResolvedIp}`
+            );
+
+            if (addrs.includes(expectedIp)) {
+              console.log(
+                `✅ DNS propagation confirmed for ${name} → ${expectedIp} (via ${resolverName})`
+              );
+              foundMatch = true;
+              break;
+            }
+          }
+        } catch (err) {
+          // Continue to next resolver if this one fails
+          continue;
+        }
+      }
+
+      if (foundMatch) {
         return true;
       }
+
+      // If we got a response but wrong IP, log it
+      if (lastResolvedIp) {
+        console.log(
+          `⏳ DNS not yet propagated [${elapsed}s]: Got ${lastResolvedIp}, expecting ${expectedIp}. Waiting...`
+        );
+      } else {
+        console.log(
+          `⏳ DNS record not found yet [${elapsed}s]. Waiting...`
+        );
+      }
     } catch (err) {
-      // ignore DNS errors and keep polling
+      // DNS query failed entirely, keep polling
+      console.log(
+        `⚠️ DNS check failed [${elapsed}s], retrying... (${err.message})`
+      );
     }
-    // backoff sleep
-    const sleepMs = Math.min(1000 * Math.pow(2, Math.min(attempt, 5)), 5000);
-    await new Promise((r) => setTimeout(r, sleepMs));
+
+    // Wait before next poll
+    await new Promise((r) => setTimeout(r, pollInterval));
   }
+
+  const elapsedSeconds = Math.round(timeoutMs / 1000);
   throw new Error(
-    `DNS A record for ${name} did not point to ${expectedIp} within ${timeoutMs}ms`
+    `DNS A record for ${name} did not point to ${expectedIp} within ${elapsedSeconds} seconds`
   );
 }
 
