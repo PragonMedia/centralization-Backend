@@ -55,12 +55,13 @@ server {
     root /var/www/${domain};
     index index.php index.html;
 
-    # MAIN ROOT (optional)
+    # Route blocks MUST come before root location to ensure proper matching
+    ${routeBlocks}
+
+    # MAIN ROOT (only matches if no route matched above)
     location / {
         try_files $uri $uri/ =404;
     }
-
-    ${routeBlocks}
 
     # Block hidden files
     location ~ /\\.ht {
