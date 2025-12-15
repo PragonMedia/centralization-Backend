@@ -153,52 +153,61 @@ async function addRedTrackDomain(rootDomain, maxRetries = 3) {
   }
 
   // All retries exhausted or non-retryable error
-  const error = lastError;
-  console.error("Error adding RedTrack domain (all retries exhausted):", error);
-
-    // Log detailed error information
-    if (error.response) {
-      console.error("RedTrack API Error Status:", error.response.status);
-      console.error("RedTrack API Error Headers:", error.response.headers);
-      console.error(
-        "RedTrack API Error Data:",
-        JSON.stringify(error.response.data, null, 2)
-      );
-
-      const errorMessage =
-        error.response.data?.error ||
-        error.response.data?.message ||
-        error.response.data?.errors?.[0]?.message ||
-        error.message;
-
-      // Make RedTrack registration non-fatal - return skipped status instead of throwing
-      // Common reasons: RedTrack API timeout, database issues on their end, domain already exists
-      console.warn(
-        `⚠️  RedTrack registration failed (non-fatal): ${errorMessage}`
-      );
-      console.warn(
-        `⚠️  Domain will be created successfully, but RedTrack registration will need to be done manually`
-      );
-
-      return {
-        domainId: null,
-        trackingDomain,
-        status: "skipped",
-        reason: errorMessage,
-      };
-    }
-
-    // For non-HTTP errors (network issues, etc.)
-    console.warn(
-      `⚠️  RedTrack registration failed (non-fatal): ${error.message}`
-    );
+  if (!lastError) {
+    // This shouldn't happen, but handle it gracefully
     return {
       domainId: null,
       trackingDomain,
       status: "skipped",
-      reason: error.message,
+      reason: "Unknown error - no error captured",
     };
   }
+
+  const error = lastError;
+  console.error("Error adding RedTrack domain (all retries exhausted):", error);
+
+  // Log detailed error information
+  if (error.response) {
+    console.error("RedTrack API Error Status:", error.response.status);
+    console.error("RedTrack API Error Headers:", error.response.headers);
+    console.error(
+      "RedTrack API Error Data:",
+      JSON.stringify(error.response.data, null, 2)
+    );
+
+    const errorMessage =
+      error.response.data?.error ||
+      error.response.data?.message ||
+      error.response.data?.errors?.[0]?.message ||
+      error.message;
+
+    // Make RedTrack registration non-fatal - return skipped status instead of throwing
+    // Common reasons: RedTrack API timeout, database issues on their end, domain already exists
+    console.warn(
+      `⚠️  RedTrack registration failed (non-fatal): ${errorMessage}`
+    );
+    console.warn(
+      `⚠️  Domain will be created successfully, but RedTrack registration will need to be done manually`
+    );
+
+    return {
+      domainId: null,
+      trackingDomain,
+      status: "skipped",
+      reason: errorMessage,
+    };
+  }
+
+  // For non-HTTP errors (network issues, etc.)
+  console.warn(
+    `⚠️  RedTrack registration failed (non-fatal): ${error.message}`
+  );
+  return {
+    domainId: null,
+    trackingDomain,
+    status: "skipped",
+    reason: error.message,
+  };
 }
 
 /**
