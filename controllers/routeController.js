@@ -651,32 +651,27 @@ exports.createRoute = async (req, res) => {
 
     await domainDoc.save();
 
-    // Copy template files from /var/www/templates/{template}/ to /var/www/{domain}/{route}/
+    // Validate template exists (nginx will serve directly from /var/www/templates/{template}/)
+    // Templates are single source of truth - no copying needed, one template serves all routes
     console.log(
-      `🔄 Copying template files: ${template} → /var/www/${domain}/${route}/`
+      `🔍 Validating template "${template}" exists...`
     );
-    const templateCopyResult = await templateService.copyTemplateFiles(
-      domain,
-      route,
-      template
-    );
-    if (templateCopyResult.success && !templateCopyResult.skipped) {
-      console.log(`✅ Template files copied successfully`);
-    } else if (templateCopyResult.skipped) {
-      console.warn(
-        `⚠️  Template copy skipped: ${
-          templateCopyResult.reason || "unknown reason"
-        }`
+    const templateValidation = await templateService.validateTemplate(template);
+    if (templateValidation.success && !templateValidation.skipped) {
+      console.log(
+        `✅ Route "${route}" added using template "${template}" (served from /var/www/templates/${template}/)`
+      );
+    } else if (templateValidation.skipped) {
+      console.log(
+        `ℹ️  Template validation skipped, but route will be created (template: "${template}")`
       );
     } else {
       console.warn(
-        `⚠️  Template copy failed (non-fatal): ${
-          templateCopyResult.error || "unknown error"
-        }`
+        `⚠️  Template validation failed (non-fatal): ${templateValidation.error || "unknown error"}`
       );
     }
 
-    // Regenerate nginx config with new route
+    // Regenerate nginx config with new route (uses alias to point to template directory)
     await generateNginxConfig(domainDoc);
 
     res.status(201).json({
