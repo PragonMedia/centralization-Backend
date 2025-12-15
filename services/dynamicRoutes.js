@@ -25,7 +25,7 @@ function buildDomainFragment(record) {
     location /${route}/ {
         alias ${templateRoot}/;
         index index.php index.html;
-        try_files $uri $uri/ /index.php?$query_string;
+        try_files $uri $uri/ /${route}/index.php?$query_string;
     }
 
     location ~ ^/${route}/(.+\\.php)$ {
@@ -124,26 +124,32 @@ async function generateNginxConfig(domainRecord = null) {
 
           // Move to final location with sudo
           try {
-            execSync(`sudo mv ${tempFile} ${configPath}`, { 
+            execSync(`sudo mv ${tempFile} ${configPath}`, {
               stdio: "inherit",
-              encoding: "utf8"
+              encoding: "utf8",
             });
-            execSync(`sudo chmod 644 ${configPath}`, { 
+            execSync(`sudo chmod 644 ${configPath}`, {
               stdio: "inherit",
-              encoding: "utf8"
+              encoding: "utf8",
             });
             console.log(`✅ Written nginx config: ${configPath}`);
-            
+
             // Verify file was written
             if (fs.existsSync(configPath)) {
               const writtenContent = fs.readFileSync(configPath, "utf8");
-              console.log(`✅ Verified: Config file exists (${writtenContent.length} bytes)`);
+              console.log(
+                `✅ Verified: Config file exists (${writtenContent.length} bytes)`
+              );
             } else {
-              console.error(`❌ Config file does not exist after write: ${configPath}`);
+              console.error(
+                `❌ Config file does not exist after write: ${configPath}`
+              );
             }
           } catch (execErr) {
             console.error(`❌ Failed to move config file: ${execErr.message}`);
-            console.error(`❌ Command output: ${execErr.stdout || execErr.stderr || "none"}`);
+            console.error(
+              `❌ Command output: ${execErr.stdout || execErr.stderr || "none"}`
+            );
             throw execErr;
           }
         } catch (err) {
@@ -171,15 +177,15 @@ async function generateNginxConfig(domainRecord = null) {
       if (configsWritten > 0) {
         try {
           console.log(`🧪 Testing nginx configuration...`);
-          const testOutput = execSync("sudo nginx -t", { 
+          const testOutput = execSync("sudo nginx -t", {
             encoding: "utf8",
-            stdio: "pipe"
+            stdio: "pipe",
           });
           console.log(`✅ Nginx config test passed`);
           console.log(`🔄 Reloading nginx...`);
-          const reloadOutput = execSync("sudo systemctl reload nginx", { 
+          const reloadOutput = execSync("sudo systemctl reload nginx", {
             encoding: "utf8",
-            stdio: "pipe"
+            stdio: "pipe",
           });
           console.log(`✅ Nginx reloaded successfully`);
         } catch (err) {
