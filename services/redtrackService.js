@@ -68,14 +68,20 @@ async function addRedTrackDomain(rootDomain, maxRetries = 3) {
     try {
       if (attempt > 1) {
         const delay = Math.min(1000 * Math.pow(2, attempt - 2), 10000); // Exponential backoff, max 10s
-        console.log(`🔄 Retrying RedTrack registration (attempt ${attempt}/${maxRetries}) after ${delay}ms...`);
+        console.log(`🔄 [RedTrack] Retrying registration (attempt ${attempt}/${maxRetries}) after ${delay}ms...`);
+        console.log(`⏳ [RedTrack] Waiting ${delay}ms before retry...`);
         await new Promise(resolve => setTimeout(resolve, delay));
+        console.log(`✅ [RedTrack] Retry delay complete, attempting registration...`);
+      } else {
+        console.log(`🚀 [RedTrack] Attempting domain registration (attempt ${attempt}/${maxRetries})...`);
       }
 
+      console.log(`📤 [RedTrack] POST /domains with payload:`, JSON.stringify(payload, null, 2));
       const createRes = await client.post("/domains", payload);
+      console.log(`✅ [RedTrack] API request successful (status: ${createRes.status})`);
 
     console.log(
-      `📥 RedTrack response:`,
+      `📥 [RedTrack] Response data:`,
       JSON.stringify(createRes.data, null, 2)
     );
 
@@ -143,12 +149,16 @@ async function addRedTrackDomain(rootDomain, maxRetries = 3) {
          error.response?.data?.error?.includes("timeout") ||
          error.response?.data?.error?.includes("MaxTimeMSExpired"));
 
-      // If it's the last attempt or not retryable, break and handle error
-      if (attempt === maxRetries || !isRetryable) {
-        break;
-      }
+              // If it's the last attempt or not retryable, break and handle error
+              if (attempt === maxRetries || !isRetryable) {
+                console.log(`🛑 [RedTrack] Stopping retries - ${attempt === maxRetries ? 'max attempts reached' : 'error is not retryable'}`);
+                break;
+              }
 
-      console.warn(`⚠️  RedTrack registration attempt ${attempt} failed (retryable): ${error.message}`);
+              console.warn(`⚠️  [RedTrack] Registration attempt ${attempt} failed (retryable): ${error.message}`);
+              if (error.response) {
+                console.warn(`⚠️  [RedTrack] Error response:`, JSON.stringify(error.response.data, null, 2));
+              }
     }
   }
 
