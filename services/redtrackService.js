@@ -136,9 +136,33 @@ async function addRedTrackDomain(rootDomain) {
         error.response.data?.errors?.[0]?.message ||
         error.message;
 
-      throw new Error(`Failed to add domain to RedTrack: ${errorMessage}`);
+      // Make RedTrack registration non-fatal - return skipped status instead of throwing
+      // Common reasons: RedTrack API timeout, database issues on their end, domain already exists
+      console.warn(
+        `⚠️  RedTrack registration failed (non-fatal): ${errorMessage}`
+      );
+      console.warn(
+        `⚠️  Domain will be created successfully, but RedTrack registration will need to be done manually`
+      );
+
+      return {
+        domainId: null,
+        trackingDomain,
+        status: "skipped",
+        reason: errorMessage,
+      };
     }
-    throw new Error(`Failed to add domain to RedTrack: ${error.message}`);
+
+    // For non-HTTP errors (network issues, etc.)
+    console.warn(
+      `⚠️  RedTrack registration failed (non-fatal): ${error.message}`
+    );
+    return {
+      domainId: null,
+      trackingDomain,
+      status: "skipped",
+      reason: error.message,
+    };
   }
 }
 

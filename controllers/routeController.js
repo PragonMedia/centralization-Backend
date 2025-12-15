@@ -345,7 +345,9 @@ exports.createDomain = async (req, res) => {
       );
       if (sslModeResult?.skipped) {
         console.warn(
-          `⚠️  SSL mode setting skipped: ${sslModeResult.reason || "unknown reason"}`
+          `⚠️  SSL mode setting skipped: ${
+            sslModeResult.reason || "unknown reason"
+          }`
         );
       } else {
         console.log(
@@ -368,7 +370,16 @@ exports.createDomain = async (req, res) => {
         redtrackResult = await redtrackService.addRedTrackDomain(
           sanitizedDomain
         );
-        console.log(`✅ RedTrack added: ${redtrackResult.trackingDomain}`);
+        if (redtrackResult.status === "skipped") {
+          console.warn(
+            `⚠️  RedTrack registration skipped: ${redtrackResult.reason || "unknown reason"}`
+          );
+          console.warn(
+            `⚠️  Domain will be created, but RedTrack registration needs to be done manually`
+          );
+        } else {
+          console.log(`✅ RedTrack added: ${redtrackResult.trackingDomain}`);
+        }
       } else {
         console.log(`ℹ️  Skipping RedTrack registration (not configured)`);
       }
