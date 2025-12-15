@@ -87,20 +87,17 @@ server {
     }
 }
 
-# HTTPS server block - Close connection (Cloudflare handles SSL and proxies HTTP)
+# HTTPS server block - Redirect to HTTP (Cloudflare handles SSL and proxies HTTP)
 # This prevents other HTTPS server blocks from matching this domain
+# Note: If Cloudflare is in "Full" SSL mode, you may need to add SSL certificates here
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443;
+    listen [::]:443;
     server_name ${domain} www.${domain};
 
-    # Use a self-signed cert or return 444
-    # Since Cloudflare handles SSL, we just need to prevent other blocks from matching
-    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
-    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
-    
-    # Close connection - Cloudflare should proxy HTTP, not HTTPS
-    return 444;
+    # Redirect HTTPS to HTTP (Cloudflare will handle SSL termination)
+    # This prevents other HTTPS server blocks from matching
+    return 301 http://$host$request_uri;
 }
 `;
 }
