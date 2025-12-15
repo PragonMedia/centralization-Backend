@@ -123,6 +123,7 @@ async function addRedTrackDomain(rootDomain, maxRetries = 3) {
       }
     }
 
+      // Success - return immediately
       return {
         domainId: String(domainId),
         trackingDomain,
