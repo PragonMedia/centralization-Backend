@@ -47,7 +47,7 @@ function getRedTrackDedicatedDomain() {
  * @param {string} rootDomain - Root domain name
  * @returns {Promise<object>} Domain ID and tracking domain
  */
-async function addRedTrackDomain(rootDomain, maxRetries = 3) {
+async function addRedTrackDomain(rootDomain) {
   const trackingDomain = buildTrackingDomain(rootDomain); // trk.sample123.com
 
   // 1. Create domain in RedTrack
@@ -61,114 +61,85 @@ async function addRedTrackDomain(rootDomain, maxRetries = 3) {
 
   console.log(`📤 Sending to RedTrack:`, JSON.stringify(payload, null, 2));
 
-  let lastError = null;
+  try {
+    const createRes = await client.post("/domains", payload);
 
-  // Retry logic - DNS propagation can take time
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const createRes = await client.post("/domains", payload);
+    console.log(
+      `📥 RedTrack response:`,
+      JSON.stringify(createRes.data, null, 2)
+    );
 
-      console.log(
-        `📥 RedTrack response:`,
+    // RedTrack API might return the domain in different formats
+    const domainId =
+      createRes.data?.id ||
+      createRes.data?.domain?.id ||
+      createRes.data?.data?.id ||
+      createRes.data?.result?.id;
+
+    if (!domainId) {
+      console.error(
+        "RedTrack response structure:",
         JSON.stringify(createRes.data, null, 2)
       );
-
-      // RedTrack API might return the domain in different formats
-      const domainId =
-        createRes.data?.id ||
-        createRes.data?.domain?.id ||
-        createRes.data?.data?.id ||
-        createRes.data?.result?.id;
-
-      if (!domainId) {
-        console.error(
-          "RedTrack response structure:",
-          JSON.stringify(createRes.data, null, 2)
-        );
-        throw new Error("Failed to get domain ID from RedTrack response");
-      }
-
-      // 2. Enable Free SSL (via regenerated_free_ssl endpoint)
-      // Note: RedTrack may auto-enable SSL, so we'll try but not fail if it errors
-      try {
-        await client.post(`/domains/regenerated_free_ssl/${domainId}`);
-        console.log(`✅ Free SSL enabled for ${trackingDomain}`);
-      } catch (sslError) {
-        // Check if it's a conflict error (SSL already enabled or custom SSL in use)
-        const errorMessage =
-          sslError.response?.data?.error || sslError.message || "";
-
-        if (
-          errorMessage.includes("custom ssl certificate") ||
-          errorMessage.includes("auto-generated ssl") ||
-          errorMessage.includes("already enabled") ||
-          errorMessage.includes("already active") ||
-          errorMessage.includes("choose one of them")
-        ) {
-          console.log(
-            `ℹ️  SSL is already configured for ${trackingDomain}. Skipping SSL regeneration.`
-          );
-          // This is not an error - SSL is already set up or auto-enabled
-        } else {
-          console.warn(
-            `⚠️  SSL regeneration may have failed: ${sslError.message}`
-          );
-          // SSL might auto-enable, so this is not necessarily fatal
-        }
-      }
-
-      return {
-        domainId: String(domainId),
-        trackingDomain,
-        status: "pending", // RedTrack will verify DNS
-      };
-    } catch (error) {
-      lastError = error;
-
-      // Check if it's a DNS propagation error
-      const isDNSError =
-        error.response?.data?.error?.includes("cname should point to") ||
-        error.response?.data?.error?.includes("DNS") ||
-        error.response?.data?.error?.includes("dns");
-
-      if (isDNSError && attempt < maxRetries) {
-        const waitTime = attempt * 10; // 10s, 20s, 30s
-        console.warn(
-          `⚠️  DNS propagation error (attempt ${attempt}/${maxRetries}). Waiting ${waitTime}s before retry...`
-        );
-        console.warn(`Error: ${error.response?.data?.error || error.message}`);
-        await new Promise((resolve) => setTimeout(resolve, waitTime * 1000));
-        continue; // Retry
-      }
-
-      // If not a DNS error or last attempt, throw
-      console.error("Error adding RedTrack domain:", error);
-
-      // Log detailed error information
-      if (error.response) {
-        console.error("RedTrack API Error Status:", error.response.status);
-        console.error("RedTrack API Error Headers:", error.response.headers);
-        console.error(
-          "RedTrack API Error Data:",
-          JSON.stringify(error.response.data, null, 2)
-        );
-
-        const errorMessage =
-          error.response.data?.error ||
-          error.response.data?.message ||
-          error.response.data?.errors?.[0]?.message ||
-          error.message;
-
-        throw new Error(`Failed to add domain to RedTrack: ${errorMessage}`);
-      }
-      throw new Error(`Failed to add domain to RedTrack: ${error.message}`);
+      throw new Error("Failed to get domain ID from RedTrack response");
     }
-  }
 
-  // If we get here, all retries failed
-  throw (
-    lastError || new Error("Failed to add domain to RedTrack after retries")
-  );
+    // 2. Enable Free SSL (via regenerated_free_ssl endpoint)
+    // Note: RedTrack may auto-enable SSL, so we'll try but not fail if it errors
+    try {
+      await client.post(`/domains/regenerated_free_ssl/${domainId}`);
+      console.log(`✅ Free SSL enabled for ${trackingDomain}`);
+    } catch (sslError) {
+      // Check if it's a conflict error (SSL already enabled or custom SSL in use)
+      const errorMessage =
+        sslError.response?.data?.error || sslError.message || "";
+
+      if (
+        errorMessage.includes("custom ssl certificate") ||
+        errorMessage.includes("auto-generated ssl") ||
+        errorMessage.includes("already enabled") ||
+        errorMessage.includes("already active") ||
+        errorMessage.includes("choose one of them")
+      ) {
+        console.log(
+          `ℹ️  SSL is already configured for ${trackingDomain}. Skipping SSL regeneration.`
+        );
+        // This is not an error - SSL is already set up or auto-enabled
+      } else {
+        console.warn(
+          `⚠️  SSL regeneration may have failed: ${sslError.message}`
+        );
+        // SSL might auto-enable, so this is not necessarily fatal
+      }
+    }
+
+    return {
+      domainId: String(domainId),
+      trackingDomain,
+      status: "pending",
+    };
+  } catch (error) {
+    console.error("Error adding RedTrack domain:", error);
+
+    // Log detailed error information
+    if (error.response) {
+      console.error("RedTrack API Error Status:", error.response.status);
+      console.error("RedTrack API Error Headers:", error.response.headers);
+      console.error(
+        "RedTrack API Error Data:",
+        JSON.stringify(error.response.data, null, 2)
+      );
+
+      const errorMessage =
+        error.response.data?.error ||
+        error.response.data?.message ||
+        error.response.data?.errors?.[0]?.message ||
+        error.message;
+
+      throw new Error(`Failed to add domain to RedTrack: ${errorMessage}`);
+    }
+    throw new Error(`Failed to add domain to RedTrack: ${error.message}`);
+  }
 }
 
 /**

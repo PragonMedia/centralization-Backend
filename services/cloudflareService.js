@@ -205,13 +205,7 @@ async function setARecord(zoneId, domain, serverIP) {
       );
 
       if (existingRecord) {
-        // If an A record exists but points elsewhere, refuse to change it (safety: do not touch existing records not created by this flow)
-        if (existingRecord.content !== serverIP) {
-          throw new Error(
-            `${displayName} A record already exists with content ${existingRecord.content}. Not modifying existing records. Please update manually if you want it to point to ${serverIP}.`
-          );
-        }
-
+        // Record already exists - use it regardless of IP (no IP verification)
         console.log(
           `✅ ${displayName} A record already present: ${existingRecord.name} → ${existingRecord.content}`
         );
