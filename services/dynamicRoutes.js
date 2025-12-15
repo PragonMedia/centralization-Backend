@@ -1,5 +1,7 @@
 // services/dynamicRoutes.js
 const axios = require("axios");
+const fs = require("fs");
+const { execSync } = require("child_process");
 const { getRoutesFromDatabase } = require("./routeService"); // keep your service
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 
@@ -80,27 +82,71 @@ async function generateNginxConfig(domainRecord = null) {
 
     // Skip nginx config if INTERNAL_SERVER_URL is not configured or points to localhost
     const internalUrl = (CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL || "").trim();
-    const isLocalhost = 
-      !internalUrl || 
-      internalUrl.includes("localhost") || 
-      internalUrl.includes("127.0.0.1") || 
+    const isLocalhost =
+      !internalUrl ||
+      internalUrl.includes("localhost") ||
+      internalUrl.includes("127.0.0.1") ||
       internalUrl.includes("::1") ||
       internalUrl === "http://localhost:3000" ||
       internalUrl === "http://127.0.0.1:3000" ||
       internalUrl.startsWith("http://localhost") ||
       internalUrl.startsWith("http://127.0.0.1");
-    
+
     if (isLocalhost) {
-      console.log(`ℹ️  Skipping nginx config (INTERNAL_SERVER_URL points to localhost: ${internalUrl || "not set"})`);
-      // Log the generated config for manual application
+      // Running on Ubuntu server - write nginx config files directly
+      console.log(
+        `📝 Writing nginx config directly (running on server, INTERNAL_SERVER_URL: ${
+          internalUrl || "not set"
+        })`
+      );
+      
+      // Ensure dynamic directory exists
+      const dynamicDir = "/etc/nginx/dynamic";
+      try {
+        if (!fs.existsSync(dynamicDir)) {
+          execSync(`sudo mkdir -p ${dynamicDir}`, { stdio: "inherit" });
+          console.log(`✅ Created directory: ${dynamicDir}`);
+        }
+      } catch (err) {
+        console.warn(`⚠️  Could not create ${dynamicDir}: ${err.message}`);
+      }
+
+      // Write each domain's config file
       for (const record of domainRecords) {
         const fragment = buildDomainFragment(record);
-        console.log(`\n📝 Generated nginx config for ${record.domain}:`);
-        console.log(`\n${fragment}\n`);
-        console.log(`💡 To apply manually, write this to: /etc/nginx/dynamic/${record.domain}.conf`);
-        console.log(`💡 Then run: sudo nginx -t && sudo systemctl reload nginx\n`);
+        const configPath = `${dynamicDir}/${record.domain}.conf`;
+        
+        try {
+          // Write config file (requires sudo, so we'll use execSync)
+          const tempFile = `/tmp/nginx_${record.domain}_${Date.now()}.conf`;
+          fs.writeFileSync(tempFile, fragment, "utf8");
+          
+          // Move to final location with sudo
+          execSync(`sudo mv ${tempFile} ${configPath}`, { stdio: "inherit" });
+          execSync(`sudo chmod 644 ${configPath}`, { stdio: "inherit" });
+          
+          console.log(`✅ Written nginx config: ${configPath}`);
+        } catch (err) {
+          console.error(`❌ Failed to write nginx config for ${record.domain}: ${err.message}`);
+          // Log the config for manual application
+          console.log(`\n📝 Generated nginx config for ${record.domain} (manual application needed):`);
+          console.log(`\n${fragment}\n`);
+        }
       }
-      return { success: true, skipped: true, reason: "localhost" };
+
+      // Test and reload nginx
+      try {
+        console.log(`🧪 Testing nginx configuration...`);
+        execSync("sudo nginx -t", { stdio: "inherit" });
+        console.log(`🔄 Reloading nginx...`);
+        execSync("sudo systemctl reload nginx", { stdio: "inherit" });
+        console.log(`✅ Nginx reloaded successfully`);
+      } catch (err) {
+        console.error(`❌ Nginx test/reload failed: ${err.message}`);
+        console.log(`💡 Please manually test and reload: sudo nginx -t && sudo systemctl reload nginx`);
+      }
+
+      return { success: true };
     }
 
     // Send each domain fragment to the Ubuntu server
@@ -139,28 +185,38 @@ async function generateNginxConfig(domainRecord = null) {
             }`
           );
           // Log config for manual application
-          console.log(`\n📝 Generated nginx config for ${record.domain} (manual application needed):`);
+          console.log(
+            `\n📝 Generated nginx config for ${record.domain} (manual application needed):`
+          );
           console.log(`\n${fragment}\n`);
         }
       } catch (axiosErr) {
         // Make nginx config non-fatal - log warning but don't block route creation
-        console.warn(`⚠️  Nginx config update failed for ${record.domain} (non-fatal): ${axiosErr.message}`);
+        console.warn(
+          `⚠️  Nginx config update failed for ${record.domain} (non-fatal): ${axiosErr.message}`
+        );
 
         if (axiosErr.code === "ECONNREFUSED" || axiosErr.code === "ETIMEDOUT") {
           console.warn(
             `⚠️  Could not connect to nginx endpoint at ${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}.`
           );
-          console.warn(`⚠️  Domain creation will continue, but nginx config needs to be applied manually.`);
+          console.warn(
+            `⚠️  Domain creation will continue, but nginx config needs to be applied manually.`
+          );
         }
-        
+
         // Log the generated config for manual application
-        console.log(`\n📝 Generated nginx config for ${record.domain} (manual application needed):`);
+        console.log(
+          `\n📝 Generated nginx config for ${record.domain} (manual application needed):`
+        );
         console.log(`\n${fragment}\n`);
         console.log(`💡 To apply manually:`);
-        console.log(`   1. Write config to: /etc/nginx/dynamic/${record.domain}.conf`);
+        console.log(
+          `   1. Write config to: /etc/nginx/dynamic/${record.domain}.conf`
+        );
         console.log(`   2. Test config: sudo nginx -t`);
         console.log(`   3. Reload nginx: sudo systemctl reload nginx\n`);
-        
+
         // Continue to next record - don't throw
       }
     }
@@ -168,7 +224,9 @@ async function generateNginxConfig(domainRecord = null) {
     return { success: true };
   } catch (err) {
     // Ultimate safety net - never throw from this function
-    console.warn(`⚠️  Nginx config generation encountered an error (non-fatal): ${err.message}`);
+    console.warn(
+      `⚠️  Nginx config generation encountered an error (non-fatal): ${err.message}`
+    );
     return { success: true, warning: err.message };
   }
 }
