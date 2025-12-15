@@ -87,7 +87,7 @@ server {
     }
 }
 
-# HTTPS server block - Redirect to HTTP (Cloudflare handles SSL and proxies HTTP)
+# HTTPS server block - Mirror HTTP block (Cloudflare handles SSL and sends HTTPS to origin)
 # This prevents other HTTPS server blocks from matching this domain
 # Note: Requires SSL cert - if snakeoil cert doesn't exist, create it with:
 # sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/ssl-cert-snakeoil.key -out /etc/ssl/certs/ssl-cert-snakeoil.pem -subj "/CN=localhost"
@@ -100,9 +100,37 @@ server {
     ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
     ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
     
-    # Redirect HTTPS to HTTP (Cloudflare will handle SSL termination)
-    # This prevents other HTTPS server blocks from matching
-    return 301 http://$host$request_uri;
+    # Basic SSL settings
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    # Debug header to verify which server block is matched
+    add_header X-Debug-Server "${domain}" always;
+
+    # Root not used for landing pages, only safety fallback
+    root /var/www/${domain};
+    index index.php index.html;
+
+    # Route blocks MUST come before root location to ensure proper matching
+    ${routeBlocks}
+
+    # GENERAL PHP fallback (catches PHP files not matched by route-specific blocks)
+    location ~ \\.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME /var/www/${domain}$uri;
+    }
+
+    # MAIN ROOT (only matches if no route matched above)
+    # Return 404 - we don't allow viewing root or template directory listings
+    location / {
+        return 404;
+    }
+
+    # Block hidden files
+    location ~ /\\.ht {
+        deny all;
+    }
 }
 `;
 }
