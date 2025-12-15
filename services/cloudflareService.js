@@ -161,10 +161,11 @@ async function disableProxy(zoneId, domain) {
 
 /**
  * Set A record for root domain and wildcard
+ * ONLY uses Cloudflare API - NEVER performs DNS lookups, polling, or validation
  * @param {string} zoneId - Cloudflare zone ID
  * @param {string} domain - Domain name
  * @param {string} serverIP - Server IP address
- * @returns {Promise<boolean>}
+ * @returns {Promise<{createdRecordIds: string[], existingRecordIds: string[]}>}
  */
 async function setARecord(zoneId, domain, serverIP) {
   try {
