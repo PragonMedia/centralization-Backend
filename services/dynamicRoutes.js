@@ -89,12 +89,17 @@ server {
 
 # HTTPS server block - Redirect to HTTP (Cloudflare handles SSL and proxies HTTP)
 # This prevents other HTTPS server blocks from matching this domain
-# Note: If Cloudflare is in "Full" SSL mode, you may need to add SSL certificates here
+# Note: Requires SSL cert - if snakeoil cert doesn't exist, create it with:
+# sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/ssl-cert-snakeoil.key -out /etc/ssl/certs/ssl-cert-snakeoil.pem -subj "/CN=localhost"
 server {
-    listen 443;
-    listen [::]:443;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name ${domain} www.${domain};
 
+    # Use self-signed cert (or Cloudflare Origin CA cert if available)
+    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
+    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+    
     # Redirect HTTPS to HTTP (Cloudflare will handle SSL termination)
     # This prevents other HTTPS server blocks from matching
     return 301 http://$host$request_uri;
