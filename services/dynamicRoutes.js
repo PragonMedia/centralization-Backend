@@ -118,6 +118,12 @@ async function generateNginxConfig(domainRecord = null) {
     ? [domainRecord]
     : await getRoutesFromDatabase();
 
+  // Skip nginx config if INTERNAL_SERVER_URL is not configured
+  if (!CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL || CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL === "http://localhost:3000") {
+    console.log(`ℹ️  Skipping nginx config (INTERNAL_SERVER_URL not configured or points to localhost)`);
+    return { success: true, skipped: true };
+  }
+
   try {
     // Send each domain fragment to the Ubuntu server
     for (const record of domainRecords) {
@@ -148,8 +154,8 @@ async function generateNginxConfig(domainRecord = null) {
           `✅ Nginx fragment applied for ${record.domain} on Ubuntu server`
         );
       } else {
-        throw new Error(
-          `Failed to apply nginx config: ${
+        console.warn(
+          `⚠️  Nginx config endpoint returned error: ${
             response.data.error || "Unknown error"
           }`
         );
@@ -158,19 +164,17 @@ async function generateNginxConfig(domainRecord = null) {
 
     return { success: true };
   } catch (err) {
-    console.error("❌ generateNginxConfig failed:", err.message);
+    // Make nginx config non-fatal - log warning but don't block domain creation
+    console.warn(`⚠️  Nginx config update failed (non-fatal): ${err.message}`);
 
-    // Provide more detailed error information
-    if (err.response) {
-      console.error("Ubuntu server response:", err.response.data);
-      throw new Error(
-        `Failed to apply nginx config on Ubuntu server: ${
-          err.response.data?.error || err.message
-        }`
+    if (err.code === "ECONNREFUSED" || err.code === "ETIMEDOUT") {
+      console.warn(
+        `⚠️  Could not connect to nginx endpoint at ${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}. Domain creation will continue without nginx config update.`
       );
     }
 
-    throw err;
+    // Return success anyway - nginx config is not critical for domain creation
+    return { success: true, warning: err.message };
   }
 }
 
