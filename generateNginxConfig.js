@@ -34,19 +34,33 @@ async function generateConfigForDomain(domainName) {
     console.log("\n📝 Generated nginx config:\n");
     console.log(fragment);
 
-    // Write to file
+    // Write to file (requires sudo)
     const configPath = `/etc/nginx/dynamic/${domainName}.conf`;
-    fs.writeFileSync(configPath, fragment, "utf8");
+    const { execSync } = require("child_process");
+    
+    // Ensure directory exists
+    try {
+      execSync(`sudo mkdir -p /etc/nginx/dynamic`, { stdio: "inherit" });
+    } catch (err) {
+      console.warn(`⚠️  Could not create directory: ${err.message}`);
+    }
+    
+    // Write to temp file first, then move with sudo
+    const tempFile = `/tmp/nginx_${domainName}_${Date.now()}.conf`;
+    fs.writeFileSync(tempFile, fragment, "utf8");
+    execSync(`sudo mv ${tempFile} ${configPath}`, { stdio: "inherit" });
+    execSync(`sudo chmod 644 ${configPath}`, { stdio: "inherit" });
     console.log(`\n✅ Written to: ${configPath}`);
 
-    // Test nginx config
-    const { execSync } = require("child_process");
+    // Test and reload nginx
     try {
       execSync("sudo nginx -t", { stdio: "inherit" });
       console.log("✅ Nginx config test passed");
-      console.log("💡 Run: sudo systemctl reload nginx");
+      console.log("🔄 Reloading nginx...");
+      execSync("sudo systemctl reload nginx", { stdio: "inherit" });
+      console.log("✅ Nginx reloaded successfully");
     } catch (error) {
-      console.error("❌ Nginx config test failed");
+      console.error("❌ Nginx test/reload failed");
       process.exit(1);
     }
 
