@@ -558,6 +558,55 @@ async function deleteDNSRecords(zoneId, domain) {
   }
 }
 
+/**
+ * Purge Cloudflare cache for a domain
+ * @param {string} zoneId - Cloudflare zone ID
+ * @param {string[]} urls - Optional array of specific URLs to purge. If empty, purges everything
+ * @returns {Promise<boolean>}
+ */
+async function purgeCache(zoneId, urls = []) {
+  try {
+    const purgeData =
+      urls.length > 0 ? { files: urls } : { purge_everything: true };
+
+    const response = await axios.post(
+      `${CLOUDFLARE_CONFIG.BASE_URL}/zones/${zoneId}/purge_cache`,
+      purgeData,
+      {
+        headers: {
+          Authorization: `Bearer ${CLOUDFLARE_CONFIG.API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (response.data.success) {
+      console.log(`✅ Cache purged successfully for zone ${zoneId}`);
+      if (urls.length > 0) {
+        console.log(`   Purged ${urls.length} URL(s)`);
+      } else {
+        console.log(`   Purged everything`);
+      }
+      return true;
+    } else {
+      throw new Error(
+        `Cache purge failed: ${JSON.stringify(response.data.errors)}`
+      );
+    }
+  } catch (error) {
+    console.error("Error purging cache:", error);
+    if (error.response) {
+      console.error("Response data:", error.response.data);
+      if (error.response.status === 403) {
+        throw new Error(
+          "Cache purge permission denied. Check API token permissions (Zone:Cache Purge)"
+        );
+      }
+    }
+    throw new Error(`Failed to purge cache: ${error.message}`);
+  }
+}
+
 module.exports = {
   getOrCreateZone,
   getZoneId,
@@ -567,4 +616,5 @@ module.exports = {
   setSSLMode,
   enableProxy,
   deleteDNSRecords,
+  purgeCache,
 };

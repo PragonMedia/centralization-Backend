@@ -653,9 +653,7 @@ exports.createRoute = async (req, res) => {
 
     // Validate template exists (nginx will serve directly from /var/www/templates/{template}/)
     // Templates are single source of truth - no copying needed, one template serves all routes
-    console.log(
-      `🔍 Validating template "${template}" exists...`
-    );
+    console.log(`🔍 Validating template "${template}" exists...`);
     const templateValidation = await templateService.validateTemplate(template);
     if (templateValidation.success && !templateValidation.skipped) {
       console.log(
@@ -667,7 +665,9 @@ exports.createRoute = async (req, res) => {
       );
     } else {
       console.warn(
-        `⚠️  Template validation failed (non-fatal): ${templateValidation.error || "unknown error"}`
+        `⚠️  Template validation failed (non-fatal): ${
+          templateValidation.error || "unknown error"
+        }`
       );
     }
 

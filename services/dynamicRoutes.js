@@ -30,7 +30,7 @@ function buildDomainFragment(record) {
     location /${route}/ {
         alias ${templateRoot}/;
         index index.php index.html;
-        try_files $uri $uri/ /${route}/index.html /${route}/index.php =404;
+        try_files $uri $uri/ /index.php?$query_string =404;
         
         # Disable directory listings
         autoindex off;
@@ -60,6 +60,13 @@ server {
 
     # Route blocks MUST come before root location to ensure proper matching
     ${routeBlocks}
+
+    # GENERAL PHP fallback (catches PHP files not matched by route-specific blocks)
+    location ~ \\.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME /var/www/${domain}$uri;
+    }
 
     # MAIN ROOT (only matches if no route matched above)
     # Return 404 - we don't allow viewing root or template directory listings

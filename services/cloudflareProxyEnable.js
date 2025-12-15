@@ -57,7 +57,9 @@ async function enableProxyForDomain(domain, targetRecordIds = []) {
       // Skip trk.* CNAME records - they should remain DNS-only until AFTER RedTrack registration
       // trk CNAME proxy is handled separately by enableProxyForTrkCNAME() after RedTrack succeeds
       if (isTrkCNAME) {
-        console.log(`⏭️  Skipping trk CNAME record: ${rec.name} (must stay DNS-only for RedTrack verification)`);
+        console.log(
+          `⏭️  Skipping trk CNAME record: ${rec.name} (must stay DNS-only for RedTrack verification)`
+        );
         continue;
       }
 
