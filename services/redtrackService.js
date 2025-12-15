@@ -102,9 +102,10 @@ async function addRedTrackDomain(rootDomain, maxRetries = 3) {
 
     // 2. Enable Free SSL (via regenerated_free_ssl endpoint)
     // Note: RedTrack may auto-enable SSL, so we'll try but not fail if it errors
+    console.log(`🔐 [RedTrack] Attempting to enable SSL for domain ID: ${domainId}`);
     try {
       await client.post(`/domains/regenerated_free_ssl/${domainId}`);
-      console.log(`✅ Free SSL enabled for ${trackingDomain}`);
+      console.log(`✅ [RedTrack] Free SSL enabled for ${trackingDomain}`);
     } catch (sslError) {
       // Check if it's a conflict error (SSL already enabled or custom SSL in use)
       const errorMessage =
@@ -118,13 +119,16 @@ async function addRedTrackDomain(rootDomain, maxRetries = 3) {
         errorMessage.includes("choose one of them")
       ) {
         console.log(
-          `ℹ️  SSL is already configured for ${trackingDomain}. Skipping SSL regeneration.`
+          `ℹ️  [RedTrack] SSL is already configured for ${trackingDomain}. Skipping SSL regeneration.`
         );
         // This is not an error - SSL is already set up or auto-enabled
       } else {
         console.warn(
-          `⚠️  SSL regeneration may have failed: ${sslError.message}`
+          `⚠️  [RedTrack] SSL regeneration may have failed: ${sslError.message}`
         );
+        if (sslError.response) {
+          console.warn(`⚠️  [RedTrack] SSL error response:`, JSON.stringify(sslError.response.data, null, 2));
+        }
         // SSL might auto-enable, so this is not necessarily fatal
       }
     }
@@ -165,6 +169,7 @@ async function addRedTrackDomain(rootDomain, maxRetries = 3) {
   // All retries exhausted or non-retryable error
   if (!lastError) {
     // This shouldn't happen, but handle it gracefully
+    console.error("❌ [RedTrack] Registration failed with unknown error after retries.");
     return {
       domainId: null,
       trackingDomain,
@@ -174,7 +179,7 @@ async function addRedTrackDomain(rootDomain, maxRetries = 3) {
   }
 
   const error = lastError;
-  console.error("Error adding RedTrack domain (all retries exhausted):", error);
+  console.error(`❌ [RedTrack] All retries exhausted (${maxRetries} attempts). Final error:`, error.message);
 
   // Log detailed error information
   if (error.response) {
