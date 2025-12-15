@@ -50,8 +50,8 @@ function buildDomainFragment(record) {
   // Configs are written to /etc/nginx/dynamic/ and included automatically
   return `
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
+    listen 80;
+    listen [::]:80;
     server_name ${domain} www.${domain};
 
     # Root not used for landing pages, only safety fallback
