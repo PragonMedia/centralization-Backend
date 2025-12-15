@@ -36,11 +36,13 @@ async function enableProxyForDomain(domain, targetRecordIds = []) {
 
     // 3. Update only the records we created in this flow:
     //    - root A (@ / domain) and wildcard A (*.domain)
-    //    - skip NS and trk.* always
+    //    - trk.* CNAME records (enable proxy for RedTrack)
+    //    - skip NS always
     //    - if targetRecordIds provided, only touch those IDs
     const updatePromises = [];
     for (const rec of records) {
       const isTargetType = ["A", "AAAA"].includes(rec.type);
+      const isTrkCNAME = rec.type === "CNAME" && rec.name.startsWith("trk.");
       const isRoot = rec.name === domain || rec.name === "@";
       const isWildcard = rec.name === `*.${domain}`;
       const isTargetId =
@@ -52,15 +54,28 @@ async function enableProxyForDomain(domain, targetRecordIds = []) {
         continue;
       }
 
-      // Skip trk.* records (RedTrack CNAME must remain DNS-only)
-      if (rec.name.startsWith("trk.")) {
-        console.log(
-          `⏭️  Skipping trk.* record: ${rec.name} (${rec.type}) - RedTrack CNAME must remain DNS-only`
+      // Enable proxy for trk.* CNAME records
+      if (isTrkCNAME) {
+        if (rec.proxied === true) {
+          console.log(`✅ ${rec.name} (${rec.type}) already proxied`);
+          continue;
+        }
+        console.log(`⚡ Enabling proxy for ${rec.name} (${rec.type})`);
+        const updatePromise = axios.patch(
+          `${baseURL}/zones/${zoneId}/dns_records/${rec.id}`,
+          { proxied: true },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+          }
         );
+        updatePromises.push(updatePromise);
         continue;
       }
 
-      // Only touch target root/wildcard records
+      // Only touch target root/wildcard A/AAAA records
       if (!isTargetType || !(isRoot || isWildcard) || !isTargetId) {
         continue;
       }
