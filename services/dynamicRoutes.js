@@ -114,7 +114,7 @@ server {
 async function generateNginxConfig(domainRecord = null) {
   // TEMPORARILY DISABLED: Skip nginx config entirely to prevent connection errors
   // This will be re-enabled once the nginx endpoint is properly configured
-  console.log(`ℹ️  Nginx config generation is temporarily disabled`);
+  console.log(`ℹ️  [${new Date().toISOString()}] Nginx config generation is temporarily disabled - early return`);
   return { success: true, skipped: true, reason: "Temporarily disabled" };
   
   /* DISABLED CODE - Re-enable when nginx endpoint is ready
