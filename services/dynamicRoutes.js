@@ -59,8 +59,9 @@ server {
     ${routeBlocks}
 
     # MAIN ROOT (only matches if no route matched above)
+    # Return 404 - we don't allow viewing root or template directory listings
     location / {
-        try_files $uri $uri/ =404;
+        return 404;
     }
 
     # Block hidden files
