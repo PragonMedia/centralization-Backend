@@ -7,7 +7,7 @@ const CLOUDFLARE_CONFIG = require("../config/cloudflare");
  * @param {string} domain - Domain name
  * @returns {Promise<object>} Success status
  */
-async function enableProxyForDomain(domain) {
+async function enableProxyForDomain(domain, targetRecordIds = [], serverIP = CLOUDFLARE_CONFIG.SERVER_IP) {
   const token = CLOUDFLARE_CONFIG.API_TOKEN;
   const baseURL = CLOUDFLARE_CONFIG.BASE_URL;
 
@@ -33,9 +33,18 @@ async function enableProxyForDomain(domain) {
     const records = recRes.data?.result || [];
     console.log(`📋 Found ${records.length} DNS record(s) for ${domain}`);
 
-    // 3. Update all records to proxied:true (except NS records and trk.* records)
+    // 3. Update only the records we created in this flow:
+    //    - root A (@ / domain) and wildcard A (*.domain)
+    //    - skip NS and trk.* always
+    //    - if targetRecordIds provided, only touch those IDs
     const updatePromises = [];
     for (const rec of records) {
+      const isTargetType = ["A", "AAAA"].includes(rec.type);
+      const isRoot = rec.name === domain || rec.name === "@";
+      const isWildcard = rec.name === `*.${domain}`;
+      const isTargetId =
+        targetRecordIds.length === 0 || targetRecordIds.includes(rec.id);
+
       // Skip NS records (nameservers cannot be proxied)
       if (rec.type === "NS") {
         console.log(`⏭️  Skipping NS record: ${rec.name}`);
@@ -50,6 +59,19 @@ async function enableProxyForDomain(domain) {
         continue;
       }
 
+      // Only touch target root/wildcard records
+      if (!isTargetType || !(isRoot || isWildcard) || !isTargetId) {
+        continue;
+      }
+
+      // Respect server IP requirement when provided
+      if (serverIP && rec.content !== serverIP) {
+        console.log(
+          `⏭️  Skipping ${rec.name} (${rec.type}) — content ${rec.content} differs from ${serverIP}`
+        );
+        continue;
+      }
+
       // Skip if already proxied
       if (rec.proxied === true) {
         console.log(`✅ ${rec.name} (${rec.type}) already proxied`);
@@ -58,15 +80,9 @@ async function enableProxyForDomain(domain) {
 
       console.log(`⚡ Enabling proxy for ${rec.name} (${rec.type})`);
 
-      const updatePromise = axios.put(
+      const updatePromise = axios.patch(
         `${baseURL}/zones/${zoneId}/dns_records/${rec.id}`,
-        {
-          type: rec.type,
-          name: rec.name,
-          content: rec.content,
-          ttl: rec.ttl === 1 ? "auto" : rec.ttl, // Preserve TTL, but use "auto" if it was 1
-          proxied: true, // ← IMPORTANT: Enable orange cloud
-        },
+        { proxied: true },
         {
           headers: {
             Authorization: `Bearer ${token}`,

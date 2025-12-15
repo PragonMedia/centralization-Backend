@@ -3,85 +3,8 @@ const { generateNginxConfig } = require("../services/dynamicRoutes");
 const cloudflareService = require("../services/cloudflareService");
 const redtrackService = require("../services/redtrackService");
 const { enableProxyForDomain } = require("../services/cloudflareProxyEnable");
-const { dnsResolver } = require("../services/dnsResolver");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
-const { monitorSSLAndEnableProxy } = require("../jobs/sslMonitoringJob");
 const axios = require("axios");
-
-/**
- * Wait until the public A record of `name` resolves to expectedIp or timeout.
- * Uses external DNS resolvers (Cloudflare/Google) to avoid Ubuntu's systemd-resolved cache.
- * NEVER uses system default resolver to prevent stale DNS cache issues.
- */
-async function waitForDnsARecord(name, expectedIp, timeoutMs = null) {
-  // Use config values if not provided
-  const timeout = timeoutMs || CLOUDFLARE_CONFIG.DNS_TIMEOUT || 120000;
-  const pollInterval = CLOUDFLARE_CONFIG.DNS_POLL_INTERVAL || 10000;
-
-  const start = Date.now();
-  let attempt = 0;
-
-  console.log(`⏳ Waiting for DNS to propagate for ${name} → ${expectedIp}`);
-  console.log(
-    `⏳ Using external DNS resolvers (Cloudflare/Google) - avoiding system cache`
-  );
-  console.log(
-    `⏳ Timeout: ${timeout / 1000}s, Poll interval: ${pollInterval / 1000}s`
-  );
-
-  while (Date.now() - start < timeout) {
-    attempt++;
-    const elapsed = Math.round((Date.now() - start) / 1000);
-
-    try {
-      // Use custom DNS resolver (external servers only, no system cache)
-      const result = await dnsResolver.checkARecord(name, expectedIp);
-
-      if (result.error) {
-        // DNS query failed (NXDOMAIN, timeout, etc.)
-        console.log(
-          `⚠️ DNS Check [Attempt ${attempt}, ${elapsed}s]: ${name} - Error: ${result.error}`
-        );
-      } else if (result.addresses.length === 0) {
-        // No A records found yet
-        console.log(
-          `⏳ DNS Check [Attempt ${attempt}, ${elapsed}s]: ${name} - No A records found yet (NXDOMAIN or not propagated)`
-        );
-      } else {
-        // Got A records, check if they match
-        const allAddresses = result.addresses.join(", ");
-        console.log(
-          `🔎 DNS Check [Attempt ${attempt}, ${elapsed}s]: ${name} → [${allAddresses}]`
-        );
-
-        if (result.match) {
-          console.log(
-            `✅ DNS propagation confirmed for ${name} → ${expectedIp} (found in: [${allAddresses}])`
-          );
-          return true;
-        } else {
-          // Wrong IP(s) returned
-          console.log(
-            `⏳ DNS not yet propagated [${elapsed}s]: Got [${allAddresses}], expecting ${expectedIp}. Waiting...`
-          );
-        }
-      }
-    } catch (err) {
-      // Unexpected error, log and continue
-      console.log(
-        `⚠️ DNS check error [${elapsed}s]: ${err.message}. Retrying...`
-      );
-    }
-
-    // Wait before next poll
-    await new Promise((r) => setTimeout(r, pollInterval));
-  }
-
-  const elapsedSeconds = Math.round(timeout / 1000);
-  throw new Error(
-    `DNS A record for ${name} did not point to ${expectedIp} within ${elapsedSeconds} seconds`
-  );
-}
 
 // GET ALL DOMAINS with sorting and filtering
 exports.getAllDomains = async (req, res) => {
@@ -323,6 +246,7 @@ exports.createDomain = async (req, res) => {
     let cloudflareZoneId = null;
     let redtrackResult = null;
     let tempDomain = null;
+    let createdARecordIds = [];
     const redtrackDedicatedDomain =
       redtrackService.getRedTrackDedicatedDomain();
 
@@ -333,46 +257,57 @@ exports.createDomain = async (req, res) => {
     );
 
     try {
-      // 1) Get or create Cloudflare zone
+      // 1) Get or create Cloudflare zone (no polling; rely on status only)
       console.log(
         `🔄 STEP 4.1 — Getting/Creating Cloudflare zone for ${sanitizedDomain}`
       );
-      cloudflareZoneId = await cloudflareService.getZoneId(sanitizedDomain);
-      console.log(`✅ Cloudflare zone ID: ${cloudflareZoneId}`);
-
-      // 2) Disable proxy for root + wildcard (required for ACME)
-      console.log(`🔄 STEP 4.2 — Disabling proxy for ${sanitizedDomain}`);
-      await cloudflareService.disableProxy(cloudflareZoneId, sanitizedDomain);
-      console.log(`✅ Proxy disabled for ACME validation`);
-
-      // 3) Add A records (root + wildcard) -> origin IP
-      console.log(
-        `🔄 STEP 4.3 — Setting A records for ${sanitizedDomain} → ${CLOUDFLARE_CONFIG.SERVER_IP}`
+      const zoneDetails = await cloudflareService.getOrCreateZone(
+        sanitizedDomain
       );
-      await cloudflareService.setARecord(
+      cloudflareZoneId = zoneDetails.id;
+      console.log(
+        `✅ Cloudflare zone: ${zoneDetails.name} (${cloudflareZoneId}) status=${zoneDetails.status}`
+      );
+
+      if (zoneDetails.status !== "active") {
+        throw new Error(
+          `Cloudflare zone is ${zoneDetails.status}. Please point registrar nameservers to Cloudflare and retry.`
+        );
+      }
+
+      // 2) Add A records (root + wildcard) -> origin IP, DNS-only
+      console.log(
+        `🔄 STEP 4.2 — Ensuring A records for ${sanitizedDomain} → ${CLOUDFLARE_CONFIG.SERVER_IP} (proxied: false)`
+      );
+      const aRecordResult = await cloudflareService.setARecord(
         cloudflareZoneId,
         sanitizedDomain,
         CLOUDFLARE_CONFIG.SERVER_IP
       );
-      console.log(`✅ A records created`);
+      createdARecordIds = aRecordResult.createdRecordIds || [];
+      console.log(
+        `✅ A record step complete (created: ${createdARecordIds.length}, existing: ${
+          aRecordResult.existingRecordIds?.length || 0
+        })`
+      );
 
-      // 4) Create RedTrack CNAME early (DNS only, no proxy)
+      // 3) Create RedTrack CNAME (DNS only, no proxy)
       if (redtrackDedicatedDomain) {
         console.log(
-          `🔄 STEP 4.4 — Creating RedTrack CNAME for ${sanitizedDomain} → ${redtrackDedicatedDomain}`
+          `🔄 STEP 4.3 — Ensuring RedTrack CNAME for ${sanitizedDomain} → ${redtrackDedicatedDomain}`
         );
         await cloudflareService.createRedTrackCNAME(
           cloudflareZoneId,
           sanitizedDomain,
           redtrackDedicatedDomain
         );
-        console.log(`✅ RedTrack CNAME created`);
+        console.log(`✅ RedTrack CNAME present (DNS-only)`);
       } else {
         console.log(`ℹ️  Skipping RedTrack CNAME (not configured)`);
       }
 
-      // 5) Create DB record with sslStatus pending, proxy disabled
-      console.log(`🔄 STEP 5 — Creating temporary domain record in database`);
+      // 4) Create DB record (proxy disabled until later)
+      console.log(`🔄 STEP 4.4 — Creating temporary domain record in database`);
       const tempDomainData = {
         domain: sanitizedDomain,
         assignedTo,
@@ -384,7 +319,7 @@ exports.createDomain = async (req, res) => {
         routes: [],
         cloudflareZoneId: cloudflareZoneId || null,
         aRecordIP: CLOUDFLARE_CONFIG.SERVER_IP || null,
-        sslStatus: "pending",
+        sslStatus: "cf-universal",
         proxyStatus: "disabled",
       };
 
@@ -393,67 +328,16 @@ exports.createDomain = async (req, res) => {
         `✅ Temporary domain record created: ${sanitizedDomain} (ID: ${tempDomain._id})`
       );
 
-      // 6) Generate nginx HTTP fragment for this domain and reload nginx
+      // 5) Generate nginx fragment (no SSL configuration changes here)
       console.log(
-        `🔄 STEP 6 — Writing nginx HTTP fragment for ${sanitizedDomain}`
+        `🔄 STEP 4.5 — Writing nginx fragment for ${sanitizedDomain}`
       );
       await generateNginxConfig(tempDomain);
-      console.log(`✅ nginx HTTP fragment ready (no SSL yet)`);
+      console.log(`✅ nginx fragment ready`);
 
-      // 7) Wait for DNS A records to resolve publicly (simple loop with timeout)
+      // 6) Set Cloudflare SSL mode (Universal SSL handles edge)
       console.log(
-        `🔄 STEP 7 — Waiting for DNS A record for ${sanitizedDomain} to propagate...`
-      );
-      const DNS_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
-      await waitForDnsARecord(
-        sanitizedDomain,
-        CLOUDFLARE_CONFIG.SERVER_IP,
-        DNS_TIMEOUT_MS
-      );
-      console.log(`✅ DNS A record resolves to ${CLOUDFLARE_CONFIG.SERVER_IP}`);
-
-      // 8) Request SSL certificate from origin (Certbot via internal endpoint)
-      console.log(
-        `🔄 STEP 8 — Requesting Let's Encrypt certificate for ${sanitizedDomain}`
-      );
-
-      const sslRequestResult = await requestOriginSSLCertificate(
-        sanitizedDomain
-      );
-
-      if (!sslRequestResult.success) {
-        const errorMsg = `SSL certificate request failed: ${
-          sslRequestResult.message || sslRequestResult.error || "Unknown error"
-        }`;
-        console.error(`❌ ${errorMsg}`);
-        throw new Error(errorMsg);
-      }
-      console.log(`✅ SSL certificate request successful`);
-
-      // 9) Verify HTTPS is working (Certbot-based verification)
-      console.log(
-        `🔄 STEP 9 — Verifying HTTPS is active for ${sanitizedDomain}`
-      );
-      const httpsVerified = await verifyHTTPS(sanitizedDomain);
-      if (!httpsVerified) {
-        throw new Error(
-          `HTTPS verification failed: Certificate issued but HTTPS connection not working`
-        );
-      }
-      console.log(`✅ HTTPS verified and active for ${sanitizedDomain}`);
-
-      // 10) Enable Cloudflare proxy for ALL DNS records (root, www, wildcard, CNAME) after SSL is active
-      console.log(
-        `🔄 STEP 10 — Enabling Cloudflare proxy for ALL DNS records: ${sanitizedDomain}`
-      );
-      await enableProxyForDomain(sanitizedDomain);
-      console.log(
-        `✅ Cloudflare proxy enabled for all records (orange cloud active)`
-      );
-
-      // 11) Set Cloudflare SSL mode to configured mode
-      console.log(
-        `🔄 STEP 11 — Setting Cloudflare SSL mode to ${CLOUDFLARE_CONFIG.SSL_MODE}`
+        `🔄 STEP 4.6 — Setting Cloudflare SSL mode to ${CLOUDFLARE_CONFIG.SSL_MODE}`
       );
       await cloudflareService.setSSLMode(
         cloudflareZoneId,
@@ -463,19 +347,21 @@ exports.createDomain = async (req, res) => {
         `✅ Cloudflare SSL mode set to ${CLOUDFLARE_CONFIG.SSL_MODE}`
       );
 
-      // 12) Update nginx fragment (HTTPS fragment now) and reload
-      console.log(`🔄 STEP 12 — Regenerating nginx fragment for HTTPS`);
-      tempDomain.sslStatus = "active";
-      tempDomain.proxyStatus = "enabled";
-      await generateNginxConfig(tempDomain);
-      console.log(`✅ nginx HTTPS fragment ready`);
+      // 7) Enable Cloudflare proxy for records we created (root + wildcard A)
+      console.log(
+        `🔄 STEP 4.7 — Enabling Cloudflare proxy for new A records on ${sanitizedDomain}`
+      );
+      await enableProxyForDomain(
+        sanitizedDomain,
+        createdARecordIds,
+        CLOUDFLARE_CONFIG.SERVER_IP
+      );
+      console.log(`✅ Cloudflare proxy enabled for created A records`);
 
-      // 13) Add domain to RedTrack (if configured)
-      // IMPORTANT: This must happen AFTER proxy is enabled for main domain
-      // NOTE: RedTrack CNAME (trk.*) must remain DNS-only (not proxied) for RedTrack DNS verification
+      // 8) Add domain to RedTrack (after proxy enablement)
       if (redtrackDedicatedDomain) {
         console.log(
-          `🔄 STEP 13 — Registering domain with RedTrack: ${sanitizedDomain}`
+          `🔄 STEP 4.8 — Registering domain with RedTrack: ${sanitizedDomain}`
         );
         redtrackResult = await redtrackService.addRedTrackDomain(
           sanitizedDomain
@@ -513,19 +399,6 @@ exports.createDomain = async (req, res) => {
         }
       }
 
-      // attempt to cleanup cloudflare records
-      if (cloudflareZoneId) {
-        try {
-          await cloudflareService.deleteDNSRecords(
-            cloudflareZoneId,
-            sanitizedDomain
-          );
-          console.log(`✅ Cloudflare DNS records cleaned up`);
-        } catch (e) {
-          console.error(`⚠️ Failed to cleanup Cloudflare records:`, e.message);
-        }
-      }
-
       const errorDetails =
         integrationError.message || integrationError.toString();
       const errorResponse = {
@@ -542,140 +415,10 @@ exports.createDomain = async (req, res) => {
       return res.status(400).json(errorResponse);
     }
 
-    // Helper function to call origin server SSL endpoint
-    async function requestOriginSSLCertificate(domain) {
-      try {
-        console.log(`📝 Requesting Let's Encrypt certificate for ${domain}...`);
-        const response = await axios.post(
-          `${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}/api/v1/ssl/request`,
-          { domain },
-          {
-            headers: {
-              Authorization: `Bearer ${CLOUDFLARE_CONFIG.INTERNAL_API_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-            timeout: 300000, // 5 minutes timeout for certbot
-          }
-        );
-
-        console.log(
-          `📥 SSL request response:`,
-          JSON.stringify(response.data, null, 2)
-        );
-
-        if (response.data.success) {
-          console.log(
-            `✅ SSL certificate request submitted for ${domain}. Status: ${response.data.status}`
-          );
-
-          // If certbot successfully issued the certificate immediately
-          if (response.data.status === "active") {
-            console.log(`✅ SSL certificate is already active for ${domain}`);
-          }
-        } else {
-          throw new Error(
-            `SSL certificate request failed: ${
-              response.data.message || "Unknown error"
-            }`
-          );
-        }
-
-        return response.data;
-      } catch (error) {
-        console.error(
-          `❌ SSL certificate request failed for ${domain}:`,
-          error.message
-        );
-        if (error.response) {
-          console.error(
-            `SSL request error details:`,
-            JSON.stringify(error.response.data, null, 2)
-          );
-        }
-        // Throw error - SSL is required for RedTrack
-        throw new Error(`SSL certificate request failed: ${error.message}`);
-      }
-    }
-
-    // Helper function to verify HTTPS is working (Certbot-based verification)
-    async function verifyHTTPS(domain, maxRetries = 10, retryDelay = 3000) {
-      const https = require("https");
-
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          const result = await new Promise((resolve, reject) => {
-            const options = {
-              hostname: domain,
-              port: 443,
-              method: "GET",
-              path: "/",
-              rejectUnauthorized: true, // Verify certificate
-              timeout: 5000,
-            };
-
-            const req = https.request(options, (res) => {
-              const cert = res.socket.getPeerCertificate();
-
-              if (cert && cert.valid_to) {
-                const expiresAt = new Date(cert.valid_to);
-                const now = new Date();
-                const expired = now > expiresAt;
-
-                if (!expired && res.statusCode >= 200 && res.statusCode < 400) {
-                  console.log(
-                    `✅ HTTPS verified: ${domain} (Status: ${
-                      res.statusCode
-                    }, Issuer: ${cert.issuer?.CN || "Unknown"})`
-                  );
-                  resolve(true);
-                } else {
-                  reject(
-                    new Error(
-                      `Certificate expired or invalid status: ${res.statusCode}`
-                    )
-                  );
-                }
-              } else {
-                reject(new Error("No certificate found"));
-              }
-            });
-
-            req.on("error", (error) => {
-              reject(error);
-            });
-
-            req.on("timeout", () => {
-              req.destroy();
-              reject(new Error("HTTPS verification timeout"));
-            });
-
-            req.end();
-          });
-
-          return result;
-        } catch (error) {
-          if (attempt >= maxRetries) {
-            console.error(
-              `❌ HTTPS verification failed after ${maxRetries} attempts:`,
-              error.message
-            );
-            return false;
-          }
-          console.log(
-            `⏳ HTTPS verification attempt ${attempt}/${maxRetries} failed, retrying in ${retryDelay}ms... (${error.message})`
-          );
-          // Wait before retry
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
-        }
-      }
-
-      return false;
-    }
-
-    // 14. Update domain record with final integration data
-    console.log(`🔄 STEP 14 — Saving final domain record to database`);
-    tempDomain.sslStatus = "active"; // SSL is active by the time we reach here
-    tempDomain.proxyStatus = "enabled"; // Proxy is enabled after SSL activation
+    // 9. Update domain record with final integration data
+    console.log(`🔄 STEP 5 — Saving final domain record to database`);
+    tempDomain.sslStatus = "cf-universal";
+    tempDomain.proxyStatus = "enabled";
     tempDomain.redtrackDomainId = redtrackResult?.domainId || null;
     tempDomain.redtrackTrackingDomain = redtrackResult?.trackingDomain || null;
 
@@ -692,24 +435,10 @@ exports.createDomain = async (req, res) => {
       }`
     );
 
-    // 14. Start background job to monitor SSL (for ongoing monitoring)
-    // Note: SSL is already active and proxy is enabled, but keep monitoring for health checks
-    if (cloudflareZoneId) {
-      // Run in background (don't await) - for ongoing monitoring
-      monitorSSLAndEnableProxy(cloudflareZoneId, sanitizedDomain).catch(
-        (err) => {
-          console.error(
-            `❌ Background SSL monitoring failed for ${sanitizedDomain}:`,
-            err
-          );
-        }
-      );
-    }
-
-    // 11. Return success
+    // Return success immediately (no DNS/SSL polling)
     res.status(201).json({
       message:
-        "Domain created successfully. SSL certificate provisioning in progress.",
+        "Domain created successfully using Cloudflare Universal SSL. Proxy enabled.",
       domain: {
         domain: newDomain.domain,
         assignedTo: newDomain.assignedTo,

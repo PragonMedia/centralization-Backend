@@ -3,12 +3,12 @@ const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 
 /**
  * Get or create Cloudflare zone for a domain
+ * Returns the full zone object so callers can inspect status.
  * @param {string} domain - Domain name
- * @returns {Promise<string>} Zone ID
+ * @returns {Promise<{id: string, name: string, status: string, name_servers: string[]}>}
  */
-async function getZoneId(domain) {
+async function getOrCreateZone(domain) {
   try {
-    // Validate API token is set
     if (
       !CLOUDFLARE_CONFIG.API_TOKEN ||
       CLOUDFLARE_CONFIG.API_TOKEN.trim() === ""
@@ -32,7 +32,12 @@ async function getZoneId(domain) {
     if (response.data.result && response.data.result.length > 0) {
       const zone = response.data.result[0];
       console.log(`✅ Found existing zone: ${zone.name} (${zone.id})`);
-      return zone.id;
+      return {
+        id: zone.id,
+        name: zone.name,
+        status: zone.status,
+        name_servers: zone.name_servers,
+      };
     }
 
     // Zone doesn't exist, create it
@@ -58,11 +63,15 @@ async function getZoneId(domain) {
     console.warn(`⚠️  IMPORTANT: Update nameservers at registrar to:`);
     newZone.name_servers.forEach((ns) => console.warn(`   - ${ns}`));
 
-    return newZone.id;
+    return {
+      id: newZone.id,
+      name: newZone.name,
+      status: newZone.status,
+      name_servers: newZone.name_servers,
+    };
   } catch (error) {
     console.error("Error getting/creating zone:", error);
 
-    // Show more detailed error information
     if (error.response) {
       const cfError = error.response.data;
       console.error("Cloudflare API Error:", JSON.stringify(cfError, null, 2));
@@ -77,6 +86,16 @@ async function getZoneId(domain) {
       `Failed to get or create Cloudflare zone: ${error.message}`
     );
   }
+}
+
+/**
+ * Backwards-compatible helper returning only the zone ID.
+ * @param {string} domain
+ * @returns {Promise<string>}
+ */
+async function getZoneId(domain) {
+  const zone = await getOrCreateZone(domain);
+  return zone.id;
 }
 
 /**
@@ -156,6 +175,9 @@ async function setARecord(zoneId, domain, serverIP) {
       { name: `*.${domain}`, displayName: "wildcard" }, // *.example.com
     ];
 
+    const createdRecordIds = [];
+    const existingRecordIds = [];
+
     for (const { name, displayName } of recordsToEnsure) {
       // Get existing A records for this name
       // For "@", we need to search by the actual domain name
@@ -182,32 +204,29 @@ async function setARecord(zoneId, domain, serverIP) {
           : record.name === name
       );
 
-      const payload = {
-        type: "A",
-        name: name, // Use "@" for root, "*.domain" for wildcard
-        content: serverIP,
-        ttl: 1, // Auto
-        proxied: false, // Disabled for SSL setup
-      };
-
       if (existingRecord) {
-        // Update existing A record
-        await axios.put(
-          `${CLOUDFLARE_CONFIG.BASE_URL}/zones/${zoneId}/dns_records/${existingRecord.id}`,
-          payload,
-          {
-            headers: {
-              Authorization: `Bearer ${CLOUDFLARE_CONFIG.API_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
+        // If an A record exists but points elsewhere, refuse to change it (safety: do not touch existing records not created by this flow)
+        if (existingRecord.content !== serverIP) {
+          throw new Error(
+            `${displayName} A record already exists with content ${existingRecord.content}. Not modifying existing records. Please update manually if you want it to point to ${serverIP}.`
+          );
+        }
+
         console.log(
-          `✅ Updated ${displayName} A record: ${name} → ${serverIP}`
+          `✅ ${displayName} A record already present: ${existingRecord.name} → ${existingRecord.content}`
         );
+        existingRecordIds.push(existingRecord.id);
       } else {
+        const payload = {
+          type: "A",
+          name: name, // Use "@" for root, "*.domain" for wildcard
+          content: serverIP,
+          ttl: 1, // Auto
+          proxied: false, // Start DNS-only per flow requirements
+        };
+
         // Create new A record
-        await axios.post(
+        const createRes = await axios.post(
           `${CLOUDFLARE_CONFIG.BASE_URL}/zones/${zoneId}/dns_records`,
           payload,
           {
@@ -217,13 +236,17 @@ async function setARecord(zoneId, domain, serverIP) {
             },
           }
         );
+        const createdId = createRes.data?.result?.id;
+        if (createdId) {
+          createdRecordIds.push(createdId);
+        }
         console.log(
-          `✅ Created ${displayName} A record: ${name} → ${serverIP}`
+          `✅ Created ${displayName} A record: ${name} → ${serverIP} (proxied: false)`
         );
       }
     }
 
-    return true;
+    return { createdRecordIds, existingRecordIds };
   } catch (error) {
     console.error("Error setting A record:", error);
     throw new Error(`Failed to set A record: ${error.message}`);
@@ -264,21 +287,23 @@ async function createRedTrackCNAME(
       (record) => record.name === trackingSubdomain
     );
 
-    // If there's an A or AAAA record, we need to delete it first (can't have both)
-    if (existingRecord && existingRecord.type !== "CNAME") {
-      console.log(
-        `⚠️  Found existing ${existingRecord.type} record for "${trackingSubdomain}". Deleting it to create CNAME...`
-      );
-      await axios.delete(
-        `${CLOUDFLARE_CONFIG.BASE_URL}/zones/${zoneId}/dns_records/${existingRecord.id}`,
-        {
-          headers: {
-            Authorization: `Bearer ${CLOUDFLARE_CONFIG.API_TOKEN}`,
-            "Content-Type": "application/json",
-          },
+    if (existingRecord) {
+      if (existingRecord.type === "CNAME") {
+        if (existingRecord.content === redtrackDedicatedDomain) {
+          console.log(
+            `✅ CNAME already exists and is correct: ${trackingSubdomain} → ${redtrackDedicatedDomain}`
+          );
+          return { recordId: existingRecord.id, created: false };
         }
+        throw new Error(
+          `CNAME for ${trackingSubdomain} already points to ${existingRecord.content}. Not modifying existing records.`
+        );
+      }
+
+      // Different record type exists; do not delete per safety requirement
+      throw new Error(
+        `${existingRecord.type} record already exists for ${trackingSubdomain}. Please remove it manually before creating CNAME to ${redtrackDedicatedDomain}.`
       );
-      console.log(`✅ Deleted existing ${existingRecord.type} record`);
     }
 
     const payload = {
@@ -286,92 +311,27 @@ async function createRedTrackCNAME(
       name: trackingSubdomain, // Use full subdomain: trk.example.com
       content: redtrackDedicatedDomain, // e.g., dx8jy.ttrk.io
       ttl: 1, // Auto (lowest TTL)
-      proxied: false, // CRITICAL: DNS only (not proxied)
+      proxied: false, // DNS only per requirements
     };
 
-    // Check if CNAME already exists and is correct
-    const existingCNAME = existingRecords.find(
-      (record) => record.name === trackingSubdomain && record.type === "CNAME"
-    );
-
-    if (existingCNAME) {
-      // Check if it's already pointing to the correct target
-      if (existingCNAME.content === redtrackDedicatedDomain) {
-        console.log(
-          `✅ CNAME already exists and is correct: ${trackingSubdomain} → ${redtrackDedicatedDomain}`
-        );
-        // Skip verification wait since it's already correct
-        return true;
-      }
-
-      // Update existing CNAME record
-      await axios.put(
-        `${CLOUDFLARE_CONFIG.BASE_URL}/zones/${zoneId}/dns_records/${existingCNAME.id}`,
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${CLOUDFLARE_CONFIG.API_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      console.log(
-        `✅ Updated CNAME: ${trackingSubdomain} → ${redtrackDedicatedDomain}`
-      );
-    } else {
-      // Create new CNAME record
-      const createResponse = await axios.post(
-        `${CLOUDFLARE_CONFIG.BASE_URL}/zones/${zoneId}/dns_records`,
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${CLOUDFLARE_CONFIG.API_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      console.log(
-        `✅ Created CNAME: ${trackingSubdomain} → ${redtrackDedicatedDomain}`
-      );
-    }
-
-    // Verify the CNAME was created correctly
-    console.log(`🔄 Verifying CNAME record...`);
-    const verifyResponse = await axios.get(
+    const createResponse = await axios.post(
       `${CLOUDFLARE_CONFIG.BASE_URL}/zones/${zoneId}/dns_records`,
+      payload,
       {
         headers: {
           Authorization: `Bearer ${CLOUDFLARE_CONFIG.API_TOKEN}`,
-        },
-        params: {
-          type: "CNAME",
-          name: trackingSubdomain, // Use full subdomain for verification
+          "Content-Type": "application/json",
         },
       }
     );
 
-    const verifiedRecords = verifyResponse.data.result || [];
-    const verifiedCNAME = verifiedRecords.find(
-      (record) => record.name === trackingSubdomain
-    );
-
-    if (!verifiedCNAME || verifiedCNAME.content !== redtrackDedicatedDomain) {
-      throw new Error(
-        `CNAME verification failed. Expected ${redtrackDedicatedDomain}, got ${
-          verifiedCNAME?.content || "none"
-        }`
-      );
-    }
+    const createdId = createResponse.data?.result?.id;
 
     console.log(
-      `✅ Verified CNAME: ${verifiedCNAME.name} → ${verifiedCNAME.content}`
+      `✅ Created CNAME: ${trackingSubdomain} → ${redtrackDedicatedDomain} (proxied: false)`
     );
 
-    // Wait for DNS propagation (RedTrack needs time to see the CNAME)
-    console.log(`⏳ Waiting 10 seconds for DNS propagation...`);
-    await new Promise((resolve) => setTimeout(resolve, 10000));
-
-    return true;
+    return { recordId: createdId, created: true };
   } catch (error) {
     console.error("Error creating RedTrack CNAME:", error);
 
@@ -424,7 +384,7 @@ async function setSSLMode(zoneId, sslMode = "full") {
  * @param {string} domain - Domain name
  * @returns {Promise<boolean>}
  */
-async function enableProxy(zoneId, domain) {
+async function enableProxy(zoneId, domain, targetRecordIds = [], serverIP = CLOUDFLARE_CONFIG.SERVER_IP) {
   try {
     // Get all DNS records
     const response = await axios.get(
@@ -442,16 +402,43 @@ async function enableProxy(zoneId, domain) {
     // "@" represents root domain, but Cloudflare may return it as the full domain name
     const targetNames = [domain, "@", `*.${domain}`];
 
-    // Filter A and AAAA records that match our target names
-    const aRecords = records.filter(
-      (record) =>
-        ["A", "AAAA"].includes(record.type) &&
-        (targetNames.includes(record.name) || record.name === domain)
-    );
+    const aRecords = records.filter((record) => {
+      const isTargetName =
+        targetNames.includes(record.name) || record.name === domain;
+      const isTargetType = ["A", "AAAA"].includes(record.type);
+      const isTargetId =
+        targetRecordIds.length === 0 || targetRecordIds.includes(record.id);
 
-    // Update each record to enable proxy
-    const updatePromises = aRecords.map((record) =>
-      axios.patch(
+      // Never touch tracking subdomain or unrelated records
+      if (record.name?.startsWith("trk.")) return false;
+
+      // Honor safety rule: only change records we just created or explicitly target
+      return isTargetName && isTargetType && isTargetId;
+    });
+
+    if (aRecords.length === 0) {
+      console.log(
+        `ℹ️  No eligible A/AAAA records to proxy for ${domain}. Skipping proxy enablement.`
+      );
+      return { updated: 0 };
+    }
+
+    const updatePromises = aRecords.map((record) => {
+      // If a record points somewhere else and isn't ours, skip touching it
+      if (serverIP && record.content !== serverIP) {
+        console.log(
+          `⏭️  Skipping ${record.name} (${record.type}) — content ${record.content} differs from ${serverIP}`
+        );
+        return Promise.resolve(null);
+      }
+
+      if (record.proxied === true) {
+        console.log(`✅ ${record.name} (${record.type}) already proxied`);
+        return Promise.resolve(null);
+      }
+
+      console.log(`⚡ Enabling proxy for ${record.name} (${record.type})`);
+      return axios.patch(
         `${CLOUDFLARE_CONFIG.BASE_URL}/zones/${zoneId}/dns_records/${record.id}`,
         { proxied: true },
         {
@@ -460,13 +447,16 @@ async function enableProxy(zoneId, domain) {
             "Content-Type": "application/json",
           },
         }
-      )
+      );
+    });
+
+    const results = await Promise.all(updatePromises);
+    const updatedCount = results.filter(Boolean).length;
+    console.log(
+      `✅ Enabled Cloudflare proxy for ${updatedCount} record(s) on ${domain}`
     );
 
-    await Promise.all(updatePromises);
-    console.log(`✅ Proxy enabled for ${domain} and *.${domain}`);
-
-    return true;
+    return { updated: updatedCount };
   } catch (error) {
     console.error("Error enabling proxy:", error);
     throw new Error(`Failed to enable proxy: ${error.message}`);
@@ -537,6 +527,7 @@ async function deleteDNSRecords(zoneId, domain) {
 }
 
 module.exports = {
+  getOrCreateZone,
   getZoneId,
   disableProxy,
   setARecord,
