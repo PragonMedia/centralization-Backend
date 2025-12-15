@@ -30,7 +30,7 @@ function buildDomainFragment(record) {
     location /${route}/ {
         alias ${templateRoot}/;
         index index.php index.html;
-        try_files $uri $uri/ /${route}/index.php?$query_string;
+        try_files $uri $uri/ =404;
     }
 
     location ~ ^/${route}/(.+\\.php)$ {
