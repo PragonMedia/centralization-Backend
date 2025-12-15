@@ -5,103 +5,62 @@ const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 
 function buildDomainFragment(record) {
   const domain = record.domain;
-  const domainRoot = `/var/www/${domain}`;
-  const hasSSL = record.sslStatus === "active";
   const routes = record.routes || [];
 
-  // Helper: generate route blocks
+  // Helper: generate route blocks using alias to point to template directories
   const routeBlocks = routes
-    .map(({ route }) => {
+    .map(({ route, template }) => {
+      if (!route || !template) return "";
+
+      const templateRoot = `/var/www/templates/${template}`;
+
       return `
-    # /${route} SUBDIRECTORY
+    # ===============================
+    # ROUTE: /${route}
+    # TEMPLATE: ${template}
+    # ===============================
+
     location /${route}/ {
-        root ${domainRoot};
+        alias ${templateRoot}/;
         index index.php index.html;
-        try_files $uri $uri/ /${route}/index.html =404;
+        try_files $uri $uri/ /index.php?$query_string;
     }
 
-    # PHP for /${route}
     location ~ ^/${route}/(.+\\.php)$ {
-        root ${domainRoot};
+        alias ${templateRoot}/;
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME ${domainRoot}$uri;
+        fastcgi_param SCRIPT_FILENAME ${templateRoot}/$1;
     }
 `;
     })
     .join("\n");
 
-  if (hasSSL) {
-    return `
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name ${domain} www.${domain};
-    root ${domainRoot};
-    index index.php index.html;
-
-    ${routeBlocks}
-
-    # GENERAL PHP fallback
-    location ~ \\.php$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME ${domainRoot}$uri;
-    }
-
-    # Let's Encrypt / ACME
-    location ^~ /.well-known/acme-challenge/ {
-        alias /var/www/acme/.well-known/acme-challenge/;
-        try_files $uri =404;
-    }
-
-    # deny dotfiles
-    location ~ /\\. { deny all; }
-
-    ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-    # avoid external include dependency - but prefer certbot's options if present
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-}
-
-# HTTP -> HTTPS redirect
+  // Use Cloudflare Universal SSL - only HTTP needed (Cloudflare handles HTTPS)
+  // Configs are written to /etc/nginx/dynamic/ and included automatically
+  return `
 server {
     listen 80;
     listen [::]:80;
     server_name ${domain} www.${domain};
-    return 301 https://$host$request_uri;
-}
-`;
-  } else {
-    return `
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${domain} www.${domain};
-    root ${domainRoot};
+
+    # Root not used for landing pages, only safety fallback
+    root /var/www/${domain};
     index index.php index.html;
 
-    # ACME challenge (webroot)
-    location ^~ /.well-known/acme-challenge/ {
-        alias /var/www/acme/.well-known/acme-challenge/;
-        try_files $uri =404;
+    # MAIN ROOT (optional)
+    location / {
+        try_files $uri $uri/ =404;
     }
 
     ${routeBlocks}
 
-    # GENERAL PHP fallback
-    location ~ \\.php$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME ${domainRoot}$uri;
+    # Block hidden files
+    location ~ /\\.ht {
+        deny all;
     }
-
-    # deny dotfiles
-    location ~ /\\. { deny all; }
 }
 `;
-  }
 }
 
 /**
@@ -114,9 +73,9 @@ server {
 async function generateNginxConfig(domainRecord = null) {
   // TEMPORARILY DISABLED: Skip nginx config entirely to prevent connection errors
   // This will be re-enabled once the nginx endpoint is properly configured
-  console.log(`ℹ️  [${new Date().toISOString()}] Nginx config generation is temporarily disabled - early return`);
+  console.log(`ℹ️  Nginx config generation is temporarily disabled`);
   return { success: true, skipped: true, reason: "Temporarily disabled" };
-  
+
   /* DISABLED CODE - Re-enable when nginx endpoint is ready
   try {
     // If a specific domainRecord is passed, send only that fragment.

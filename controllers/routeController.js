@@ -7,6 +7,7 @@ const {
   enableProxyForTrkCNAME,
   disableProxyForTrkCNAME,
 } = require("../services/cloudflareProxyEnable");
+const templateService = require("../services/templateService");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 const axios = require("axios");
 
@@ -389,10 +390,12 @@ exports.createDomain = async (req, res) => {
           `🔄 STEP 4.9 — Registering domain with RedTrack: ${sanitizedDomain} (trk CNAME is DNS-only for verification)`
         );
         // Wait a few seconds for DNS propagation before RedTrack verification
-        console.log(`⏳ Waiting 5 seconds for DNS propagation before RedTrack registration...`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        console.log(
+          `⏳ Waiting 5 seconds for DNS propagation before RedTrack registration...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 5000));
         console.log(`✅ DNS propagation wait complete`);
-        
+
         redtrackResult = await redtrackService.addRedTrackDomain(
           sanitizedDomain
         );
@@ -647,7 +650,34 @@ exports.createRoute = async (req, res) => {
     });
 
     await domainDoc.save();
-    await generateNginxConfig();
+
+    // Copy template files from /var/www/templates/{template}/ to /var/www/{domain}/{route}/
+    console.log(
+      `🔄 Copying template files: ${template} → /var/www/${domain}/${route}/`
+    );
+    const templateCopyResult = await templateService.copyTemplateFiles(
+      domain,
+      route,
+      template
+    );
+    if (templateCopyResult.success && !templateCopyResult.skipped) {
+      console.log(`✅ Template files copied successfully`);
+    } else if (templateCopyResult.skipped) {
+      console.warn(
+        `⚠️  Template copy skipped: ${
+          templateCopyResult.reason || "unknown reason"
+        }`
+      );
+    } else {
+      console.warn(
+        `⚠️  Template copy failed (non-fatal): ${
+          templateCopyResult.error || "unknown error"
+        }`
+      );
+    }
+
+    // Regenerate nginx config with new route
+    await generateNginxConfig(domainDoc);
 
     res.status(201).json({
       message: "Route added successfully.",
