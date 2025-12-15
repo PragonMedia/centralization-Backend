@@ -22,6 +22,11 @@ function buildDomainFragment(record) {
     # TEMPLATE: ${template}
     # ===============================
 
+    # Redirect /${route} to /${route}/ (with trailing slash)
+    location = /${route} {
+        return 301 /${route}/;
+    }
+
     location /${route}/ {
         alias ${templateRoot}/;
         index index.php index.html;
