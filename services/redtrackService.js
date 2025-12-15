@@ -43,11 +43,12 @@ function getRedTrackDedicatedDomain() {
 }
 
 /**
- * Add domain to RedTrack
+ * Add domain to RedTrack with retry logic
  * @param {string} rootDomain - Root domain name
+ * @param {number} maxRetries - Maximum number of retry attempts (default: 3)
  * @returns {Promise<object>} Domain ID and tracking domain
  */
-async function addRedTrackDomain(rootDomain) {
+async function addRedTrackDomain(rootDomain, maxRetries = 3) {
   const trackingDomain = buildTrackingDomain(rootDomain); // trk.sample123.com
 
   // 1. Create domain in RedTrack
@@ -61,8 +62,17 @@ async function addRedTrackDomain(rootDomain) {
 
   console.log(`📤 Sending to RedTrack:`, JSON.stringify(payload, null, 2));
 
-  try {
-    const createRes = await client.post("/domains", payload);
+  // Retry logic for transient RedTrack API issues
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 1) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 2), 10000); // Exponential backoff, max 10s
+        console.log(`🔄 Retrying RedTrack registration (attempt ${attempt}/${maxRetries}) after ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+
+      const createRes = await client.post("/domains", payload);
 
     console.log(
       `📥 RedTrack response:`,
@@ -113,13 +123,37 @@ async function addRedTrackDomain(rootDomain) {
       }
     }
 
-    return {
-      domainId: String(domainId),
-      trackingDomain,
-      status: "pending",
-    };
-  } catch (error) {
-    console.error("Error adding RedTrack domain:", error);
+      return {
+        domainId: String(domainId),
+        trackingDomain,
+        status: "pending",
+      };
+    } catch (error) {
+      lastError = error;
+      
+      // Check if this is a retryable error
+      const isRetryable = 
+        error.response?.status >= 500 || // Server errors
+        error.response?.status === 429 || // Rate limiting
+        error.code === "ETIMEDOUT" ||
+        error.code === "ECONNRESET" ||
+        error.code === "ECONNREFUSED" ||
+        (error.response?.data?.error?.includes("time limit") || 
+         error.response?.data?.error?.includes("timeout") ||
+         error.response?.data?.error?.includes("MaxTimeMSExpired"));
+
+      // If it's the last attempt or not retryable, break and handle error
+      if (attempt === maxRetries || !isRetryable) {
+        break;
+      }
+
+      console.warn(`⚠️  RedTrack registration attempt ${attempt} failed (retryable): ${error.message}`);
+    }
+  }
+
+  // All retries exhausted or non-retryable error
+  const error = lastError;
+  console.error("Error adding RedTrack domain (all retries exhausted):", error);
 
     // Log detailed error information
     if (error.response) {
