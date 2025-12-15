@@ -11,7 +11,12 @@ const { buildDomainFragment } = require("./services/dynamicRoutes");
 async function generateConfigForDomain(domainName) {
   try {
     // Connect to MongoDB
-    await mongoose.connect(process.env.MONGODB_URI);
+    const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI;
+    if (!mongoUri) {
+      console.error("❌ MONGO_URI or MONGODB_URI environment variable not set");
+      process.exit(1);
+    }
+    await mongoose.connect(mongoUri);
     console.log("✅ Connected to MongoDB");
 
     // Find domain
