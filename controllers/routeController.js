@@ -291,10 +291,10 @@ exports.createDomain = async (req, res) => {
         }, existing: ${aRecordResult.existingRecordIds?.length || 0})`
       );
 
-      // 3) Create RedTrack CNAME (DNS only, no proxy)
+      // 3) Create RedTrack CNAME (DNS only, no proxy - RedTrack needs to verify it first)
       if (redtrackDedicatedDomain) {
         console.log(
-          `🔄 STEP 4.3 — Ensuring RedTrack CNAME for ${sanitizedDomain} → ${redtrackDedicatedDomain}`
+          `🔄 STEP 4.3 — Ensuring RedTrack CNAME for ${sanitizedDomain} → ${redtrackDedicatedDomain} (DNS-only for RedTrack verification)`
         );
         await cloudflareService.createRedTrackCNAME(
           cloudflareZoneId,
@@ -355,30 +355,39 @@ exports.createDomain = async (req, res) => {
         );
       }
 
-      // 7) Enable Cloudflare proxy for records we created (root + wildcard A)
+      // 7) Enable Cloudflare proxy for A records only (NOT trk CNAME yet - RedTrack needs to verify first)
       console.log(
         `🔄 STEP 4.7 — Enabling Cloudflare proxy for new A records on ${sanitizedDomain}`
       );
       await enableProxyForDomain(sanitizedDomain, createdARecordIds);
       console.log(`✅ Cloudflare proxy enabled for created A records`);
 
-      // 8) Add domain to RedTrack (after proxy enablement)
+      // 8) Add domain to RedTrack (BEFORE enabling proxy on trk CNAME - they need to verify DNS)
       if (redtrackDedicatedDomain) {
         console.log(
-          `🔄 STEP 4.8 — Registering domain with RedTrack: ${sanitizedDomain}`
+          `🔄 STEP 4.8 — Registering domain with RedTrack: ${sanitizedDomain} (trk CNAME is DNS-only for verification)`
         );
         redtrackResult = await redtrackService.addRedTrackDomain(
           sanitizedDomain
         );
         if (redtrackResult.status === "skipped") {
           console.warn(
-            `⚠️  RedTrack registration skipped: ${redtrackResult.reason || "unknown reason"}`
+            `⚠️  RedTrack registration skipped: ${
+              redtrackResult.reason || "unknown reason"
+            }`
           );
           console.warn(
             `⚠️  Domain will be created, but RedTrack registration needs to be done manually`
           );
         } else {
           console.log(`✅ RedTrack added: ${redtrackResult.trackingDomain}`);
+          
+          // 9) NOW enable proxy for trk CNAME after RedTrack registration succeeds
+          console.log(
+            `🔄 STEP 4.9 — Enabling Cloudflare proxy for trk CNAME (after RedTrack registration)`
+          );
+          await enableProxyForDomain(sanitizedDomain, []); // Empty array = enable for all eligible records including trk CNAME
+          console.log(`✅ Cloudflare proxy enabled for trk CNAME`);
         }
       } else {
         console.log(`ℹ️  Skipping RedTrack registration (not configured)`);
