@@ -71,12 +71,6 @@ server {
  * which actually writes the files and reloads nginx.
  */
 async function generateNginxConfig(domainRecord = null) {
-  // TEMPORARILY DISABLED: Skip nginx config entirely to prevent connection errors
-  // This will be re-enabled once the nginx endpoint is properly configured
-  console.log(`ℹ️  Nginx config generation is temporarily disabled`);
-  return { success: true, skipped: true, reason: "Temporarily disabled" };
-
-  /* DISABLED CODE - Re-enable when nginx endpoint is ready
   try {
     // If a specific domainRecord is passed, send only that fragment.
     // Otherwise fetch all records and send fragments for each.
@@ -98,7 +92,15 @@ async function generateNginxConfig(domainRecord = null) {
     
     if (isLocalhost) {
       console.log(`ℹ️  Skipping nginx config (INTERNAL_SERVER_URL points to localhost: ${internalUrl || "not set"})`);
-      return { success: true, skipped: true };
+      // Log the generated config for manual application
+      for (const record of domainRecords) {
+        const fragment = buildDomainFragment(record);
+        console.log(`\n📝 Generated nginx config for ${record.domain}:`);
+        console.log(`\n${fragment}\n`);
+        console.log(`💡 To apply manually, write this to: /etc/nginx/dynamic/${record.domain}.conf`);
+        console.log(`💡 Then run: sudo nginx -t && sudo systemctl reload nginx\n`);
+      }
+      return { success: true, skipped: true, reason: "localhost" };
     }
 
     // Send each domain fragment to the Ubuntu server
@@ -136,16 +138,29 @@ async function generateNginxConfig(domainRecord = null) {
               response.data.error || "Unknown error"
             }`
           );
+          // Log config for manual application
+          console.log(`\n📝 Generated nginx config for ${record.domain} (manual application needed):`);
+          console.log(`\n${fragment}\n`);
         }
       } catch (axiosErr) {
-        // Make nginx config non-fatal - log warning but don't block domain creation
+        // Make nginx config non-fatal - log warning but don't block route creation
         console.warn(`⚠️  Nginx config update failed for ${record.domain} (non-fatal): ${axiosErr.message}`);
 
         if (axiosErr.code === "ECONNREFUSED" || axiosErr.code === "ETIMEDOUT") {
           console.warn(
-            `⚠️  Could not connect to nginx endpoint at ${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}. Domain creation will continue without nginx config update.`
+            `⚠️  Could not connect to nginx endpoint at ${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}.`
           );
+          console.warn(`⚠️  Domain creation will continue, but nginx config needs to be applied manually.`);
         }
+        
+        // Log the generated config for manual application
+        console.log(`\n📝 Generated nginx config for ${record.domain} (manual application needed):`);
+        console.log(`\n${fragment}\n`);
+        console.log(`💡 To apply manually:`);
+        console.log(`   1. Write config to: /etc/nginx/dynamic/${record.domain}.conf`);
+        console.log(`   2. Test config: sudo nginx -t`);
+        console.log(`   3. Reload nginx: sudo systemctl reload nginx\n`);
+        
         // Continue to next record - don't throw
       }
     }
@@ -156,7 +171,6 @@ async function generateNginxConfig(domainRecord = null) {
     console.warn(`⚠️  Nginx config generation encountered an error (non-fatal): ${err.message}`);
     return { success: true, warning: err.message };
   }
-  */
 }
 
 module.exports = { generateNginxConfig, buildDomainFragment };
