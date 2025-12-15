@@ -54,24 +54,10 @@ async function enableProxyForDomain(domain, targetRecordIds = []) {
         continue;
       }
 
-      // Enable proxy for trk.* CNAME records
+      // Skip trk.* CNAME records - they should remain DNS-only until AFTER RedTrack registration
+      // trk CNAME proxy is handled separately by enableProxyForTrkCNAME() after RedTrack succeeds
       if (isTrkCNAME) {
-        if (rec.proxied === true) {
-          console.log(`✅ ${rec.name} (${rec.type}) already proxied`);
-          continue;
-        }
-        console.log(`⚡ Enabling proxy for ${rec.name} (${rec.type})`);
-        const updatePromise = axios.patch(
-          `${baseURL}/zones/${zoneId}/dns_records/${rec.id}`,
-          { proxied: true },
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-        updatePromises.push(updatePromise);
+        console.log(`⏭️  Skipping trk CNAME record: ${rec.name} (must stay DNS-only for RedTrack verification)`);
         continue;
       }
 
@@ -143,9 +129,11 @@ async function enableProxyForTrkCNAME(domain) {
 
   try {
     console.log(`🔍 [enableProxyForTrkCNAME] Starting for domain: ${domain}`);
-    
+
     // 1. Get zone for domain
-    console.log(`🔍 [enableProxyForTrkCNAME] Fetching Cloudflare zone for: ${domain}`);
+    console.log(
+      `🔍 [enableProxyForTrkCNAME] Fetching Cloudflare zone for: ${domain}`
+    );
     const zoneRes = await axios.get(`${baseURL}/zones`, {
       params: { name: domain },
       headers: { Authorization: `Bearer ${token}` },
@@ -153,14 +141,18 @@ async function enableProxyForTrkCNAME(domain) {
 
     const zoneId = zoneRes.data?.result?.[0]?.id;
     if (!zoneId) {
-      console.error(`❌ [enableProxyForTrkCNAME] Zone not found for domain: ${domain}`);
+      console.error(
+        `❌ [enableProxyForTrkCNAME] Zone not found for domain: ${domain}`
+      );
       throw new Error(`Zone not found in Cloudflare for domain: ${domain}`);
     }
     console.log(`✅ [enableProxyForTrkCNAME] Found zone: ${zoneId}`);
 
     // 2. Get trk CNAME record
     const trackingSubdomain = `trk.${domain}`;
-    console.log(`🔍 [enableProxyForTrkCNAME] Fetching CNAME record: ${trackingSubdomain}`);
+    console.log(
+      `🔍 [enableProxyForTrkCNAME] Fetching CNAME record: ${trackingSubdomain}`
+    );
     const recRes = await axios.get(`${baseURL}/zones/${zoneId}/dns_records`, {
       params: { name: trackingSubdomain, type: "CNAME" },
       headers: { Authorization: `Bearer ${token}` },
@@ -172,20 +164,30 @@ async function enableProxyForTrkCNAME(domain) {
     );
 
     if (!trkRecord) {
-      console.error(`❌ [enableProxyForTrkCNAME] trk CNAME record not found: ${trackingSubdomain}`);
+      console.error(
+        `❌ [enableProxyForTrkCNAME] trk CNAME record not found: ${trackingSubdomain}`
+      );
       return { success: false, error: "trk CNAME record not found" };
     }
 
-    console.log(`📋 [enableProxyForTrkCNAME] Current trk CNAME status: proxied=${trkRecord.proxied}, target=${trkRecord.content}`);
+    console.log(
+      `📋 [enableProxyForTrkCNAME] Current trk CNAME status: proxied=${trkRecord.proxied}, target=${trkRecord.content}`
+    );
 
     if (trkRecord.proxied === true) {
-      console.log(`✅ [enableProxyForTrkCNAME] ${trkRecord.name} (CNAME) already proxied - no action needed`);
+      console.log(
+        `✅ [enableProxyForTrkCNAME] ${trkRecord.name} (CNAME) already proxied - no action needed`
+      );
       return { success: true };
     }
 
     // 3. Enable proxy for trk CNAME
-    console.log(`⚡ [enableProxyForTrkCNAME] Enabling proxy for ${trkRecord.name} (CNAME)`);
-    console.log(`📝 [enableProxyForTrkCNAME] Updating record ID: ${trkRecord.id} in zone: ${zoneId}`);
+    console.log(
+      `⚡ [enableProxyForTrkCNAME] Enabling proxy for ${trkRecord.name} (CNAME)`
+    );
+    console.log(
+      `📝 [enableProxyForTrkCNAME] Updating record ID: ${trkRecord.id} in zone: ${zoneId}`
+    );
     await axios.patch(
       `${baseURL}/zones/${zoneId}/dns_records/${trkRecord.id}`,
       { proxied: true },
@@ -197,12 +199,20 @@ async function enableProxyForTrkCNAME(domain) {
       }
     );
 
-    console.log(`✅ [enableProxyForTrkCNAME] Successfully enabled Cloudflare proxy for trk CNAME: ${trkRecord.name}`);
+    console.log(
+      `✅ [enableProxyForTrkCNAME] Successfully enabled Cloudflare proxy for trk CNAME: ${trkRecord.name}`
+    );
     return { success: true };
   } catch (error) {
-    console.error(`❌ [enableProxyForTrkCNAME] Error enabling proxy for trk CNAME:`, error.message);
+    console.error(
+      `❌ [enableProxyForTrkCNAME] Error enabling proxy for trk CNAME:`,
+      error.message
+    );
     if (error.response) {
-      console.error(`❌ [enableProxyForTrkCNAME] Cloudflare API error:`, JSON.stringify(error.response.data, null, 2));
+      console.error(
+        `❌ [enableProxyForTrkCNAME] Cloudflare API error:`,
+        JSON.stringify(error.response.data, null, 2)
+      );
     }
     return { success: false, error: error.message };
   }
@@ -219,9 +229,11 @@ async function disableProxyForTrkCNAME(domain) {
 
   try {
     console.log(`🔍 [disableProxyForTrkCNAME] Starting for domain: ${domain}`);
-    
+
     // 1. Get zone for domain
-    console.log(`🔍 [disableProxyForTrkCNAME] Fetching Cloudflare zone for: ${domain}`);
+    console.log(
+      `🔍 [disableProxyForTrkCNAME] Fetching Cloudflare zone for: ${domain}`
+    );
     const zoneRes = await axios.get(`${baseURL}/zones`, {
       params: { name: domain },
       headers: { Authorization: `Bearer ${token}` },
@@ -229,14 +241,18 @@ async function disableProxyForTrkCNAME(domain) {
 
     const zoneId = zoneRes.data?.result?.[0]?.id;
     if (!zoneId) {
-      console.error(`❌ [disableProxyForTrkCNAME] Zone not found for domain: ${domain}`);
+      console.error(
+        `❌ [disableProxyForTrkCNAME] Zone not found for domain: ${domain}`
+      );
       throw new Error(`Zone not found in Cloudflare for domain: ${domain}`);
     }
     console.log(`✅ [disableProxyForTrkCNAME] Found zone: ${zoneId}`);
 
     // 2. Get trk CNAME record
     const trackingSubdomain = `trk.${domain}`;
-    console.log(`🔍 [disableProxyForTrkCNAME] Fetching CNAME record: ${trackingSubdomain}`);
+    console.log(
+      `🔍 [disableProxyForTrkCNAME] Fetching CNAME record: ${trackingSubdomain}`
+    );
     const recRes = await axios.get(`${baseURL}/zones/${zoneId}/dns_records`, {
       params: { name: trackingSubdomain, type: "CNAME" },
       headers: { Authorization: `Bearer ${token}` },
@@ -248,14 +264,20 @@ async function disableProxyForTrkCNAME(domain) {
     );
 
     if (!trkRecord) {
-      console.error(`❌ [disableProxyForTrkCNAME] trk CNAME record not found: ${trackingSubdomain}`);
+      console.error(
+        `❌ [disableProxyForTrkCNAME] trk CNAME record not found: ${trackingSubdomain}`
+      );
       return { success: false, error: "trk CNAME record not found" };
     }
 
-    console.log(`📋 [disableProxyForTrkCNAME] Current trk CNAME status: proxied=${trkRecord.proxied}, target=${trkRecord.content}`);
+    console.log(
+      `📋 [disableProxyForTrkCNAME] Current trk CNAME status: proxied=${trkRecord.proxied}, target=${trkRecord.content}`
+    );
 
     if (trkRecord.proxied === false) {
-      console.log(`✅ [disableProxyForTrkCNAME] ${trkRecord.name} (CNAME) already DNS-only - no action needed`);
+      console.log(
+        `✅ [disableProxyForTrkCNAME] ${trkRecord.name} (CNAME) already DNS-only - no action needed`
+      );
       return { success: true };
     }
 
@@ -263,7 +285,9 @@ async function disableProxyForTrkCNAME(domain) {
     console.log(
       `⚡ [disableProxyForTrkCNAME] Disabling proxy for ${trkRecord.name} (CNAME) - needed for RedTrack verification`
     );
-    console.log(`📝 [disableProxyForTrkCNAME] Updating record ID: ${trkRecord.id} in zone: ${zoneId}`);
+    console.log(
+      `📝 [disableProxyForTrkCNAME] Updating record ID: ${trkRecord.id} in zone: ${zoneId}`
+    );
     await axios.patch(
       `${baseURL}/zones/${zoneId}/dns_records/${trkRecord.id}`,
       { proxied: false },
@@ -280,9 +304,15 @@ async function disableProxyForTrkCNAME(domain) {
     );
     return { success: true };
   } catch (error) {
-    console.error(`❌ [disableProxyForTrkCNAME] Error disabling proxy for trk CNAME:`, error.message);
+    console.error(
+      `❌ [disableProxyForTrkCNAME] Error disabling proxy for trk CNAME:`,
+      error.message
+    );
     if (error.response) {
-      console.error(`❌ [disableProxyForTrkCNAME] Cloudflare API error:`, JSON.stringify(error.response.data, null, 2));
+      console.error(
+        `❌ [disableProxyForTrkCNAME] Cloudflare API error:`,
+        JSON.stringify(error.response.data, null, 2)
+      );
     }
     return { success: false, error: error.message };
   }
