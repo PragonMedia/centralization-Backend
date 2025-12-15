@@ -49,9 +49,10 @@ function buildDomainFragment(record) {
     })
     .join("\n");
 
-  // Use Cloudflare Universal SSL - only HTTP needed (Cloudflare handles HTTPS)
+  // Use Cloudflare Universal SSL - HTTP for Cloudflare proxy, HTTPS block to prevent other HTTPS blocks from matching
   // Configs are written to /etc/nginx/dynamic/ and included automatically
   return `
+# HTTP server block (Cloudflare proxies HTTPS -> HTTP)
 server {
     listen 80;
     listen [::]:80;
@@ -84,6 +85,22 @@ server {
     location ~ /\\.ht {
         deny all;
     }
+}
+
+# HTTPS server block - Close connection (Cloudflare handles SSL and proxies HTTP)
+# This prevents other HTTPS server blocks from matching this domain
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${domain} www.${domain};
+
+    # Use a self-signed cert or return 444
+    # Since Cloudflare handles SSL, we just need to prevent other blocks from matching
+    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
+    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+    
+    # Close connection - Cloudflare should proxy HTTP, not HTTPS
+    return 444;
 }
 `;
 }
