@@ -286,9 +286,9 @@ exports.createDomain = async (req, res) => {
       );
       createdARecordIds = aRecordResult.createdRecordIds || [];
       console.log(
-        `✅ A record step complete (created: ${createdARecordIds.length}, existing: ${
-          aRecordResult.existingRecordIds?.length || 0
-        })`
+        `✅ A record step complete (created: ${
+          createdARecordIds.length
+        }, existing: ${aRecordResult.existingRecordIds?.length || 0})`
       );
 
       // 3) Create RedTrack CNAME (DNS only, no proxy)
@@ -351,11 +351,7 @@ exports.createDomain = async (req, res) => {
       console.log(
         `🔄 STEP 4.7 — Enabling Cloudflare proxy for new A records on ${sanitizedDomain}`
       );
-      await enableProxyForDomain(
-        sanitizedDomain,
-        createdARecordIds,
-        CLOUDFLARE_CONFIG.SERVER_IP
-      );
+      await enableProxyForDomain(sanitizedDomain, createdARecordIds);
       console.log(`✅ Cloudflare proxy enabled for created A records`);
 
       // 8) Add domain to RedTrack (after proxy enablement)

@@ -2,12 +2,13 @@ const axios = require("axios");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 
 /**
- * Enable Cloudflare proxy for ALL DNS records in a domain (except NS records)
- * This is called after SSL is successfully issued to enable orange-cloud proxy
+ * Enable Cloudflare proxy for DNS records in a domain (except NS and trk.* records)
+ * Only enables proxy for records specified by targetRecordIds, or all root/wildcard A records if empty
  * @param {string} domain - Domain name
+ * @param {string[]} targetRecordIds - Array of DNS record IDs to enable proxy for (empty = all root/wildcard A records)
  * @returns {Promise<object>} Success status
  */
-async function enableProxyForDomain(domain, targetRecordIds = [], serverIP = CLOUDFLARE_CONFIG.SERVER_IP) {
+async function enableProxyForDomain(domain, targetRecordIds = []) {
   const token = CLOUDFLARE_CONFIG.API_TOKEN;
   const baseURL = CLOUDFLARE_CONFIG.BASE_URL;
 
@@ -61,14 +62,6 @@ async function enableProxyForDomain(domain, targetRecordIds = [], serverIP = CLO
 
       // Only touch target root/wildcard records
       if (!isTargetType || !(isRoot || isWildcard) || !isTargetId) {
-        continue;
-      }
-
-      // Respect server IP requirement when provided
-      if (serverIP && rec.content !== serverIP) {
-        console.log(
-          `⏭️  Skipping ${rec.name} (${rec.type}) — content ${rec.content} differs from ${serverIP}`
-        );
         continue;
       }
 
