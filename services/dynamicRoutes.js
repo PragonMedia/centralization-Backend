@@ -30,7 +30,7 @@ function buildDomainFragment(record) {
     location /${route}/ {
         alias ${templateRoot}/;
         index index.php index.html;
-        try_files $uri $uri/ /index.php?$query_string =404;
+        try_files $uri $uri/ /${route}/index.html /${route}/index.php =404;
         
         # Disable directory listings
         autoindex off;
