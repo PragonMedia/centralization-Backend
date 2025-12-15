@@ -339,13 +339,19 @@ exports.createDomain = async (req, res) => {
       console.log(
         `🔄 STEP 4.6 — Setting Cloudflare SSL mode to ${CLOUDFLARE_CONFIG.SSL_MODE}`
       );
-      await cloudflareService.setSSLMode(
+      const sslModeResult = await cloudflareService.setSSLMode(
         cloudflareZoneId,
         CLOUDFLARE_CONFIG.SSL_MODE
       );
-      console.log(
-        `✅ Cloudflare SSL mode set to ${CLOUDFLARE_CONFIG.SSL_MODE}`
-      );
+      if (sslModeResult?.skipped) {
+        console.warn(
+          `⚠️  SSL mode setting skipped: ${sslModeResult.reason || "unknown reason"}`
+        );
+      } else {
+        console.log(
+          `✅ Cloudflare SSL mode set to ${CLOUDFLARE_CONFIG.SSL_MODE}`
+        );
+      }
 
       // 7) Enable Cloudflare proxy for records we created (root + wildcard A)
       console.log(

@@ -368,8 +368,19 @@ async function setSSLMode(zoneId, sslMode = "full") {
     console.log(`✅ SSL mode set to: ${sslMode}`);
     return response.data.result;
   } catch (error) {
-    console.error("Error setting SSL mode:", error);
-    throw new Error(`Failed to set SSL mode: ${error.message}`);
+    // Make SSL mode setting non-fatal - log warning but don't block domain creation
+    // Common reasons for failure: API token lacks Zone:Edit:SSL permissions, or zone is on a plan that doesn't support it
+    if (error.response?.status === 403) {
+      console.warn(`⚠️  Could not set SSL mode to ${sslMode}: API token lacks Zone:Edit:SSL permission (non-fatal)`);
+      console.warn(`⚠️  You can set SSL mode manually in Cloudflare dashboard or update API token permissions`);
+      return { skipped: true, reason: "insufficient_permissions" };
+    } else if (error.response?.status === 400) {
+      console.warn(`⚠️  Could not set SSL mode to ${sslMode}: Invalid request (non-fatal)`);
+      return { skipped: true, reason: "invalid_request" };
+    } else {
+      console.warn(`⚠️  Could not set SSL mode to ${sslMode}: ${error.message} (non-fatal)`);
+      return { skipped: true, reason: error.message };
+    }
   }
 }
 
