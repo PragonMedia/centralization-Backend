@@ -31,6 +31,9 @@ function buildDomainFragment(record) {
         alias ${templateRoot}/;
         index index.php index.html;
         try_files $uri $uri/ =404;
+        
+        # Disable directory listings
+        autoindex off;
     }
 
     location ~ ^/${route}/(.+\\.php)$ {
