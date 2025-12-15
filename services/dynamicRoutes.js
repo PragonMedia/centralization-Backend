@@ -99,7 +99,7 @@ async function generateNginxConfig(domainRecord = null) {
           internalUrl || "not set"
         })`
       );
-      
+
       // Ensure dynamic directory exists
       const dynamicDir = "/etc/nginx/dynamic";
       try {
@@ -115,35 +115,83 @@ async function generateNginxConfig(domainRecord = null) {
       for (const record of domainRecords) {
         const fragment = buildDomainFragment(record);
         const configPath = `${dynamicDir}/${record.domain}.conf`;
-        
+
         try {
           // Write config file (requires sudo, so we'll use execSync)
           const tempFile = `/tmp/nginx_${record.domain}_${Date.now()}.conf`;
           fs.writeFileSync(tempFile, fragment, "utf8");
-          
+          console.log(`📝 Created temp file: ${tempFile}`);
+
           // Move to final location with sudo
-          execSync(`sudo mv ${tempFile} ${configPath}`, { stdio: "inherit" });
-          execSync(`sudo chmod 644 ${configPath}`, { stdio: "inherit" });
-          
-          console.log(`✅ Written nginx config: ${configPath}`);
+          try {
+            execSync(`sudo mv ${tempFile} ${configPath}`, { 
+              stdio: "inherit",
+              encoding: "utf8"
+            });
+            execSync(`sudo chmod 644 ${configPath}`, { 
+              stdio: "inherit",
+              encoding: "utf8"
+            });
+            console.log(`✅ Written nginx config: ${configPath}`);
+            
+            // Verify file was written
+            if (fs.existsSync(configPath)) {
+              const writtenContent = fs.readFileSync(configPath, "utf8");
+              console.log(`✅ Verified: Config file exists (${writtenContent.length} bytes)`);
+            } else {
+              console.error(`❌ Config file does not exist after write: ${configPath}`);
+            }
+          } catch (execErr) {
+            console.error(`❌ Failed to move config file: ${execErr.message}`);
+            console.error(`❌ Command output: ${execErr.stdout || execErr.stderr || "none"}`);
+            throw execErr;
+          }
         } catch (err) {
-          console.error(`❌ Failed to write nginx config for ${record.domain}: ${err.message}`);
+          console.error(
+            `❌ Failed to write nginx config for ${record.domain}: ${err.message}`
+          );
+          console.error(`❌ Error stack: ${err.stack}`);
           // Log the config for manual application
-          console.log(`\n📝 Generated nginx config for ${record.domain} (manual application needed):`);
+          console.log(
+            `\n📝 Generated nginx config for ${record.domain} (manual application needed):`
+          );
           console.log(`\n${fragment}\n`);
         }
       }
 
-      // Test and reload nginx
-      try {
-        console.log(`🧪 Testing nginx configuration...`);
-        execSync("sudo nginx -t", { stdio: "inherit" });
-        console.log(`🔄 Reloading nginx...`);
-        execSync("sudo systemctl reload nginx", { stdio: "inherit" });
-        console.log(`✅ Nginx reloaded successfully`);
-      } catch (err) {
-        console.error(`❌ Nginx test/reload failed: ${err.message}`);
-        console.log(`💡 Please manually test and reload: sudo nginx -t && sudo systemctl reload nginx`);
+      // Test and reload nginx (only if at least one config was written)
+      let configsWritten = 0;
+      for (const record of domainRecords) {
+        const configPath = `/etc/nginx/dynamic/${record.domain}.conf`;
+        if (fs.existsSync(configPath)) {
+          configsWritten++;
+        }
+      }
+
+      if (configsWritten > 0) {
+        try {
+          console.log(`🧪 Testing nginx configuration...`);
+          const testOutput = execSync("sudo nginx -t", { 
+            encoding: "utf8",
+            stdio: "pipe"
+          });
+          console.log(`✅ Nginx config test passed`);
+          console.log(`🔄 Reloading nginx...`);
+          const reloadOutput = execSync("sudo systemctl reload nginx", { 
+            encoding: "utf8",
+            stdio: "pipe"
+          });
+          console.log(`✅ Nginx reloaded successfully`);
+        } catch (err) {
+          console.error(`❌ Nginx test/reload failed: ${err.message}`);
+          if (err.stdout) console.error(`stdout: ${err.stdout}`);
+          if (err.stderr) console.error(`stderr: ${err.stderr}`);
+          console.log(
+            `💡 Please manually test and reload: sudo nginx -t && sudo systemctl reload nginx`
+          );
+        }
+      } else {
+        console.warn(`⚠️  No config files were written, skipping nginx reload`);
       }
 
       return { success: true };
