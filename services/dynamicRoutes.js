@@ -112,6 +112,12 @@ server {
  * which actually writes the files and reloads nginx.
  */
 async function generateNginxConfig(domainRecord = null) {
+  // TEMPORARILY DISABLED: Skip nginx config entirely to prevent connection errors
+  // This will be re-enabled once the nginx endpoint is properly configured
+  console.log(`ℹ️  Nginx config generation is temporarily disabled`);
+  return { success: true, skipped: true, reason: "Temporarily disabled" };
+  
+  /* DISABLED CODE - Re-enable when nginx endpoint is ready
   try {
     // If a specific domainRecord is passed, send only that fragment.
     // Otherwise fetch all records and send fragments for each.
