@@ -197,6 +197,7 @@ async function generateNginxConfig(domainRecord = null) {
     console.warn(`⚠️  Nginx config generation encountered an error (non-fatal): ${err.message}`);
     return { success: true, warning: err.message };
   }
+  */
 }
 
 module.exports = { generateNginxConfig, buildDomainFragment };
