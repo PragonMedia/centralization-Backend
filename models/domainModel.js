@@ -52,7 +52,7 @@ const domainSchema = new mongoose.Schema(
     },
     sslStatus: {
       type: String,
-      enum: ["pending", "active", "failed"],
+      enum: ["pending", "active", "failed", "cf-universal"],
       default: "pending",
     },
     proxyStatus: {
