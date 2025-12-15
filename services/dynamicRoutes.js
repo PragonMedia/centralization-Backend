@@ -112,19 +112,30 @@ server {
  * which actually writes the files and reloads nginx.
  */
 async function generateNginxConfig(domainRecord = null) {
-  // If a specific domainRecord is passed, send only that fragment.
-  // Otherwise fetch all records and send fragments for each.
-  const domainRecords = domainRecord
-    ? [domainRecord]
-    : await getRoutesFromDatabase();
-
-  // Skip nginx config if INTERNAL_SERVER_URL is not configured
-  if (!CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL || CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL === "http://localhost:3000") {
-    console.log(`ℹ️  Skipping nginx config (INTERNAL_SERVER_URL not configured or points to localhost)`);
-    return { success: true, skipped: true };
-  }
-
   try {
+    // If a specific domainRecord is passed, send only that fragment.
+    // Otherwise fetch all records and send fragments for each.
+    const domainRecords = domainRecord
+      ? [domainRecord]
+      : await getRoutesFromDatabase();
+
+    // Skip nginx config if INTERNAL_SERVER_URL is not configured or points to localhost
+    const internalUrl = (CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL || "").trim();
+    const isLocalhost = 
+      !internalUrl || 
+      internalUrl.includes("localhost") || 
+      internalUrl.includes("127.0.0.1") || 
+      internalUrl.includes("::1") ||
+      internalUrl === "http://localhost:3000" ||
+      internalUrl === "http://127.0.0.1:3000" ||
+      internalUrl.startsWith("http://localhost") ||
+      internalUrl.startsWith("http://127.0.0.1");
+    
+    if (isLocalhost) {
+      console.log(`ℹ️  Skipping nginx config (INTERNAL_SERVER_URL points to localhost: ${internalUrl || "not set"})`);
+      return { success: true, skipped: true };
+    }
+
     // Send each domain fragment to the Ubuntu server
     for (const record of domainRecords) {
       const fragment = buildDomainFragment(record);
@@ -133,47 +144,51 @@ async function generateNginxConfig(domainRecord = null) {
         `🔄 Sending nginx fragment for ${record.domain} to Ubuntu server...`
       );
 
-      // Send HTTP request to Ubuntu server's internal nginx endpoint
-      const response = await axios.post(
-        `${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}/api/v1/nginx/apply`,
-        {
-          domain: record.domain,
-          fragment: fragment,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${CLOUDFLARE_CONFIG.INTERNAL_API_TOKEN}`,
-            "Content-Type": "application/json",
+      try {
+        // Send HTTP request to Ubuntu server's internal nginx endpoint
+        const response = await axios.post(
+          `${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}/api/v1/nginx/apply`,
+          {
+            domain: record.domain,
+            fragment: fragment,
           },
-          timeout: 30000, // 30 second timeout
-        }
-      );
+          {
+            headers: {
+              Authorization: `Bearer ${CLOUDFLARE_CONFIG.INTERNAL_API_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 30000, // 30 second timeout
+          }
+        );
 
-      if (response.data.success) {
-        console.log(
-          `✅ Nginx fragment applied for ${record.domain} on Ubuntu server`
-        );
-      } else {
-        console.warn(
-          `⚠️  Nginx config endpoint returned error: ${
-            response.data.error || "Unknown error"
-          }`
-        );
+        if (response.data.success) {
+          console.log(
+            `✅ Nginx fragment applied for ${record.domain} on Ubuntu server`
+          );
+        } else {
+          console.warn(
+            `⚠️  Nginx config endpoint returned error: ${
+              response.data.error || "Unknown error"
+            }`
+          );
+        }
+      } catch (axiosErr) {
+        // Make nginx config non-fatal - log warning but don't block domain creation
+        console.warn(`⚠️  Nginx config update failed for ${record.domain} (non-fatal): ${axiosErr.message}`);
+
+        if (axiosErr.code === "ECONNREFUSED" || axiosErr.code === "ETIMEDOUT") {
+          console.warn(
+            `⚠️  Could not connect to nginx endpoint at ${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}. Domain creation will continue without nginx config update.`
+          );
+        }
+        // Continue to next record - don't throw
       }
     }
 
     return { success: true };
   } catch (err) {
-    // Make nginx config non-fatal - log warning but don't block domain creation
-    console.warn(`⚠️  Nginx config update failed (non-fatal): ${err.message}`);
-
-    if (err.code === "ECONNREFUSED" || err.code === "ETIMEDOUT") {
-      console.warn(
-        `⚠️  Could not connect to nginx endpoint at ${CLOUDFLARE_CONFIG.INTERNAL_SERVER_URL}. Domain creation will continue without nginx config update.`
-      );
-    }
-
-    // Return success anyway - nginx config is not critical for domain creation
+    // Ultimate safety net - never throw from this function
+    console.warn(`⚠️  Nginx config generation encountered an error (non-fatal): ${err.message}`);
     return { success: true, warning: err.message };
   }
 }
