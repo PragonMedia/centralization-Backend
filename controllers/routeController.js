@@ -2,7 +2,7 @@ const Domain = require("../models/domainModel");
 const { generateNginxConfig } = require("../services/dynamicRoutes");
 const cloudflareService = require("../services/cloudflareService");
 const redtrackService = require("../services/redtrackService");
-const { enableProxyForDomain } = require("../services/cloudflareProxyEnable");
+const { enableProxyForDomain, enableProxyForTrkCNAME, disableProxyForTrkCNAME } = require("../services/cloudflareProxyEnable");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 const axios = require("axios");
 

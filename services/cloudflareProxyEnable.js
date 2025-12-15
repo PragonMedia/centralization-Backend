@@ -193,4 +193,65 @@ async function enableProxyForTrkCNAME(domain) {
   }
 }
 
-module.exports = { enableProxyForDomain, enableProxyForTrkCNAME };
+/**
+ * Disable Cloudflare proxy for trk CNAME record (for RedTrack verification)
+ * @param {string} domain - Domain name
+ * @returns {Promise<object>} Success status
+ */
+async function disableProxyForTrkCNAME(domain) {
+  const token = CLOUDFLARE_CONFIG.API_TOKEN;
+  const baseURL = CLOUDFLARE_CONFIG.BASE_URL;
+
+  try {
+    // 1. Get zone for domain
+    const zoneRes = await axios.get(`${baseURL}/zones`, {
+      params: { name: domain },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const zoneId = zoneRes.data?.result?.[0]?.id;
+    if (!zoneId) {
+      throw new Error(`Zone not found in Cloudflare for domain: ${domain}`);
+    }
+
+    // 2. Get trk CNAME record
+    const trackingSubdomain = `trk.${domain}`;
+    const recRes = await axios.get(`${baseURL}/zones/${zoneId}/dns_records`, {
+      params: { name: trackingSubdomain, type: "CNAME" },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const records = recRes.data?.result || [];
+    const trkRecord = records.find((rec) => rec.name === trackingSubdomain && rec.type === "CNAME");
+
+    if (!trkRecord) {
+      return { success: false, error: "trk CNAME record not found" };
+    }
+
+    if (trkRecord.proxied === false) {
+      console.log(`✅ ${trkRecord.name} (CNAME) already DNS-only`);
+      return { success: true };
+    }
+
+    // 3. Disable proxy for trk CNAME
+    console.log(`⚡ Disabling proxy for ${trkRecord.name} (CNAME) - needed for RedTrack verification`);
+    await axios.patch(
+      `${baseURL}/zones/${zoneId}/dns_records/${trkRecord.id}`,
+      { proxied: false },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log(`✅ Disabled Cloudflare proxy for trk CNAME: ${trkRecord.name} (now DNS-only)`);
+    return { success: true };
+  } catch (error) {
+    console.error(`❌ Error disabling proxy for trk CNAME:`, error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+module.exports = { enableProxyForDomain, enableProxyForTrkCNAME, disableProxyForTrkCNAME };
