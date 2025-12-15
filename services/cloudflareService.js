@@ -285,13 +285,13 @@ async function createRedTrackCNAME(
     if (existingRecord) {
       if (existingRecord.type === "CNAME") {
         // Normalize both for comparison (handle trailing dot)
-        const existingTarget = existingRecord.content.endsWith('.') 
-          ? existingRecord.content 
+        const existingTarget = existingRecord.content.endsWith(".")
+          ? existingRecord.content
           : `${existingRecord.content}.`;
-        const expectedTarget = redtrackDedicatedDomain.endsWith('.') 
-          ? redtrackDedicatedDomain 
+        const expectedTarget = redtrackDedicatedDomain.endsWith(".")
+          ? redtrackDedicatedDomain
           : `${redtrackDedicatedDomain}.`;
-        
+
         if (existingTarget === expectedTarget) {
           console.log(
             `✅ CNAME already exists and is correct: ${trackingSubdomain} → ${existingRecord.content}`
@@ -309,10 +309,15 @@ async function createRedTrackCNAME(
       );
     }
 
+    // Ensure CNAME target has trailing dot for FQDN format
+    const cnameTarget = redtrackDedicatedDomain.endsWith(".")
+      ? redtrackDedicatedDomain
+      : `${redtrackDedicatedDomain}.`;
+
     const payload = {
       type: "CNAME",
       name: trackingSubdomain, // Use full subdomain: trk.example.com
-      content: redtrackDedicatedDomain, // e.g., dx8jy.ttrk.io
+      content: cnameTarget, // e.g., dx8jy.ttrk.io. (with trailing dot for FQDN)
       ttl: 1, // Auto (lowest TTL)
       proxied: false, // DNS only per requirements
     };
