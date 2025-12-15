@@ -32,6 +32,9 @@ function buildDomainFragment(record) {
         index index.php index.html;
         try_files $uri $uri/ /${route}/index.html /${route}/index.php =404;
         
+        # Debug header to verify route location is matched
+        add_header X-Debug-Location "${route}-route" always;
+        
         # Disable directory listings
         autoindex off;
     }
@@ -53,6 +56,9 @@ server {
     listen 80;
     listen [::]:80;
     server_name ${domain} www.${domain};
+
+    # Debug header to verify which server block is matched
+    add_header X-Debug-Server "${domain}" always;
 
     # Root not used for landing pages, only safety fallback
     root /var/www/${domain};
