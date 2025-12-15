@@ -284,9 +284,17 @@ async function createRedTrackCNAME(
 
     if (existingRecord) {
       if (existingRecord.type === "CNAME") {
-        if (existingRecord.content === redtrackDedicatedDomain) {
+        // Normalize both for comparison (handle trailing dot)
+        const existingTarget = existingRecord.content.endsWith('.') 
+          ? existingRecord.content 
+          : `${existingRecord.content}.`;
+        const expectedTarget = redtrackDedicatedDomain.endsWith('.') 
+          ? redtrackDedicatedDomain 
+          : `${redtrackDedicatedDomain}.`;
+        
+        if (existingTarget === expectedTarget) {
           console.log(
-            `✅ CNAME already exists and is correct: ${trackingSubdomain} → ${redtrackDedicatedDomain}`
+            `✅ CNAME already exists and is correct: ${trackingSubdomain} → ${existingRecord.content}`
           );
           return { recordId: existingRecord.id, created: false };
         }
@@ -371,14 +379,22 @@ async function setSSLMode(zoneId, sslMode = "full") {
     // Make SSL mode setting non-fatal - log warning but don't block domain creation
     // Common reasons for failure: API token lacks Zone:Edit:SSL permissions, or zone is on a plan that doesn't support it
     if (error.response?.status === 403) {
-      console.warn(`⚠️  Could not set SSL mode to ${sslMode}: API token lacks Zone:Edit:SSL permission (non-fatal)`);
-      console.warn(`⚠️  You can set SSL mode manually in Cloudflare dashboard or update API token permissions`);
+      console.warn(
+        `⚠️  Could not set SSL mode to ${sslMode}: API token lacks Zone:Edit:SSL permission (non-fatal)`
+      );
+      console.warn(
+        `⚠️  You can set SSL mode manually in Cloudflare dashboard or update API token permissions`
+      );
       return { skipped: true, reason: "insufficient_permissions" };
     } else if (error.response?.status === 400) {
-      console.warn(`⚠️  Could not set SSL mode to ${sslMode}: Invalid request (non-fatal)`);
+      console.warn(
+        `⚠️  Could not set SSL mode to ${sslMode}: Invalid request (non-fatal)`
+      );
       return { skipped: true, reason: "invalid_request" };
     } else {
-      console.warn(`⚠️  Could not set SSL mode to ${sslMode}: ${error.message} (non-fatal)`);
+      console.warn(
+        `⚠️  Could not set SSL mode to ${sslMode}: ${error.message} (non-fatal)`
+      );
       return { skipped: true, reason: error.message };
     }
   }
@@ -390,7 +406,12 @@ async function setSSLMode(zoneId, sslMode = "full") {
  * @param {string} domain - Domain name
  * @returns {Promise<boolean>}
  */
-async function enableProxy(zoneId, domain, targetRecordIds = [], serverIP = CLOUDFLARE_CONFIG.SERVER_IP) {
+async function enableProxy(
+  zoneId,
+  domain,
+  targetRecordIds = [],
+  serverIP = CLOUDFLARE_CONFIG.SERVER_IP
+) {
   try {
     // Get all DNS records
     const response = await axios.get(

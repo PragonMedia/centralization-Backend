@@ -2,7 +2,11 @@ const Domain = require("../models/domainModel");
 const { generateNginxConfig } = require("../services/dynamicRoutes");
 const cloudflareService = require("../services/cloudflareService");
 const redtrackService = require("../services/redtrackService");
-const { enableProxyForDomain, enableProxyForTrkCNAME, disableProxyForTrkCNAME } = require("../services/cloudflareProxyEnable");
+const {
+  enableProxyForDomain,
+  enableProxyForTrkCNAME,
+  disableProxyForTrkCNAME,
+} = require("../services/cloudflareProxyEnable");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 const axios = require("axios");
 
@@ -362,9 +366,13 @@ exports.createDomain = async (req, res) => {
         );
         const disableResult = await disableProxyForTrkCNAME(sanitizedDomain);
         if (disableResult.success) {
-          console.log(`✅ trk CNAME is DNS-only (ready for RedTrack verification)`);
+          console.log(
+            `✅ trk CNAME is DNS-only (ready for RedTrack verification)`
+          );
         } else {
-          console.warn(`⚠️  Could not ensure trk CNAME is DNS-only: ${disableResult.error}`);
+          console.warn(
+            `⚠️  Could not ensure trk CNAME is DNS-only: ${disableResult.error}`
+          );
         }
       }
 
@@ -380,6 +388,11 @@ exports.createDomain = async (req, res) => {
         console.log(
           `🔄 STEP 4.9 — Registering domain with RedTrack: ${sanitizedDomain} (trk CNAME is DNS-only for verification)`
         );
+        // Wait a few seconds for DNS propagation before RedTrack verification
+        console.log(`⏳ Waiting 5 seconds for DNS propagation before RedTrack registration...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        console.log(`✅ DNS propagation wait complete`);
+        
         redtrackResult = await redtrackService.addRedTrackDomain(
           sanitizedDomain
         );
@@ -394,7 +407,7 @@ exports.createDomain = async (req, res) => {
           );
         } else {
           console.log(`✅ RedTrack added: ${redtrackResult.trackingDomain}`);
-          
+
           // 10) NOW enable proxy for trk CNAME after RedTrack registration succeeds
           console.log(
             `🔄 STEP 4.10 — Enabling Cloudflare proxy for trk CNAME (after RedTrack registration)`
@@ -403,7 +416,9 @@ exports.createDomain = async (req, res) => {
           if (trkProxyResult.success) {
             console.log(`✅ Cloudflare proxy enabled for trk CNAME`);
           } else {
-            console.warn(`⚠️  Could not enable proxy for trk CNAME: ${trkProxyResult.error}`);
+            console.warn(
+              `⚠️  Could not enable proxy for trk CNAME: ${trkProxyResult.error}`
+            );
           }
         }
       } else {
