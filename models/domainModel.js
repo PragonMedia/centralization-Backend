@@ -10,6 +10,7 @@ const routeSchema = new mongoose.Schema({
     default: "paragon media",
   },
   ringbaID: { type: String },
+  rtkID: { type: String },
   phoneNumber: { type: String },
   createdBy: { type: String },
   platform: {
