@@ -27,22 +27,24 @@ function buildDomainFragment(record) {
         return 301 /${route}/;
     }
 
-    # PHP files - match all PHP files under the route
-    # This MUST come before the directory location block
-    location ~ ^/${route}/(.+)\\.php$ {
-        alias ${templateRoot}/$1.php;
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME ${templateRoot}/$1.php;
-    }
-
-    location /${route}/ {
+    # Route location - handles both static files and PHP
+    # Using prefix location (^~) for highest priority matching
+    location ^~ /${route}/ {
         alias ${templateRoot}/;
         index index.php index.html;
-        try_files $uri $uri/ /${route}/index.html /${route}/index.php =404;
         
         # Debug header to verify route location is matched
         add_header X-Debug-Location "${route}-route" always;
+        
+        # Handle PHP files with nested location
+        location ~ \\.php$ {
+            include snippets/fastcgi-php.conf;
+            fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+            fastcgi_param SCRIPT_FILENAME ${templateRoot}$fastcgi_script_name;
+        }
+        
+        # Handle static files and directory fallbacks
+        try_files $uri $uri/ /${route}/index.html /${route}/index.php =404;
         
         # Disable directory listings
         autoindex off;
