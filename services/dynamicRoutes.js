@@ -73,6 +73,21 @@ server {
     # Route blocks MUST come before root location to ensure proper matching
     ${routeBlocks}
 
+    # API proxy - proxy /api/ requests to backend on localhost:3000
+    # This allows templates to use relative URLs like /api/v1/domain-route-details
+    # which will work over HTTPS without mixed content errors
+    location /api/ {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+
     # GENERAL PHP fallback (catches PHP files not matched by route-specific blocks)
     location ~ \\.php$ {
         include snippets/fastcgi-php.conf;
@@ -118,6 +133,21 @@ server {
 
     # Route blocks MUST come before root location to ensure proper matching
     ${routeBlocks}
+
+    # API proxy - proxy /api/ requests to backend on localhost:3000
+    # This allows templates to use relative URLs like /api/v1/domain-route-details
+    # which will work over HTTPS without mixed content errors
+    location /api/ {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
 
     # GENERAL PHP fallback (catches PHP files not matched by route-specific blocks)
     location ~ \\.php$ {
