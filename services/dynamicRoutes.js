@@ -27,18 +27,10 @@ function buildDomainFragment(record) {
         return 301 /${route}/;
     }
 
-    # PHP files directly under route (e.g., /test/clickid.php, /test/gtg.php)
+    # PHP files - match all PHP files under the route
     # This MUST come before the directory location block
-    location ~ ^/${route}/([^/]+\\.php)$ {
-        alias ${templateRoot}/;
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME ${templateRoot}/$1;
-    }
-
-    # PHP files in subdirectories (e.g., /test/subdir/file.php)
     location ~ ^/${route}/(.+)\\.php$ {
-        alias ${templateRoot}/;
+        alias ${templateRoot}/$1.php;
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME ${templateRoot}/$1.php;
