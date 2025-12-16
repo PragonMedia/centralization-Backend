@@ -205,11 +205,16 @@ async function generateNginxConfig(domainRecord = null) {
         })`
       );
 
+      // Check if running as root (no sudo needed)
+      const isRoot = process.getuid && process.getuid() === 0;
+      const sudoCmd = isRoot ? "" : "sudo ";
+      console.log(`🔧 Running as ${isRoot ? "root" : "non-root user"}, using: ${sudoCmd || "no sudo"}`);
+
       // Ensure dynamic directory exists
       const dynamicDir = "/etc/nginx/dynamic";
       try {
         if (!fs.existsSync(dynamicDir)) {
-          execSync(`sudo mkdir -p ${dynamicDir}`, { stdio: "inherit" });
+          execSync(`${sudoCmd}mkdir -p ${dynamicDir}`, { stdio: "inherit" });
           console.log(`✅ Created directory: ${dynamicDir}`);
         }
       } catch (err) {
@@ -227,13 +232,13 @@ async function generateNginxConfig(domainRecord = null) {
           fs.writeFileSync(tempFile, fragment, "utf8");
           console.log(`📝 Created temp file: ${tempFile}`);
 
-          // Move to final location with sudo
+          // Move to final location (with sudo if not root)
           try {
-            execSync(`sudo mv ${tempFile} ${configPath}`, {
+            execSync(`${sudoCmd}mv ${tempFile} ${configPath}`, {
               stdio: "inherit",
               encoding: "utf8",
             });
-            execSync(`sudo chmod 644 ${configPath}`, {
+            execSync(`${sudoCmd}chmod 644 ${configPath}`, {
               stdio: "inherit",
               encoding: "utf8",
             });
@@ -282,13 +287,13 @@ async function generateNginxConfig(domainRecord = null) {
       if (configsWritten > 0) {
         try {
           console.log(`🧪 Testing nginx configuration...`);
-          const testOutput = execSync("sudo nginx -t", {
+          const testOutput = execSync(`${sudoCmd}nginx -t`, {
             encoding: "utf8",
             stdio: "pipe",
           });
           console.log(`✅ Nginx config test passed`);
           console.log(`🔄 Reloading nginx...`);
-          const reloadOutput = execSync("sudo systemctl reload nginx", {
+          const reloadOutput = execSync(`${sudoCmd}systemctl reload nginx`, {
             encoding: "utf8",
             stdio: "pipe",
           });
