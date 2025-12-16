@@ -672,7 +672,20 @@ exports.createRoute = async (req, res) => {
     }
 
     // Regenerate nginx config with new route (uses alias to point to template directory)
-    await generateNginxConfig(domainDoc);
+    console.log(`🔄 Regenerating nginx config for ${domainDoc.domain} with new route: ${route}`);
+    try {
+      const nginxResult = await generateNginxConfig(domainDoc);
+      if (nginxResult && nginxResult.success) {
+        console.log(`✅ Nginx config regenerated successfully for ${domainDoc.domain}`);
+      } else {
+        console.warn(`⚠️  Nginx config regeneration completed with warnings for ${domainDoc.domain}`);
+      }
+    } catch (nginxErr) {
+      console.error(`❌ Failed to regenerate nginx config: ${nginxErr.message}`);
+      console.error(`❌ Nginx error stack: ${nginxErr.stack}`);
+      // Don't fail the route creation if nginx config fails - log warning but continue
+      console.warn(`⚠️  Route created but nginx config needs manual regeneration`);
+    }
 
     res.status(201).json({
       message: "Route added successfully.",
