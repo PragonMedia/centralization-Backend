@@ -79,6 +79,11 @@ function buildDomainFragment(record) {
         default_type text/html;
         add_header X-Debug-Location "xx-g2" always;
     }
+    # Serve static assets for xx-g2 (images, CSS, JS, etc.)
+    location ^~ /xx-g2/ {
+        root /var/www/generic-pages;
+        try_files $uri $uri/ =404;
+    }
     
     # Privacy page (HTML)
     location = /privacy {
