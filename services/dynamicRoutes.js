@@ -61,10 +61,9 @@ function buildDomainFragment(record) {
     # GENERIC PAGES (shared across all domains)
     # ===============================
     
-    # Homepage (root) - use root + try_files instead of alias for exact match
+    # Homepage (root) - use alias for exact match
     location = / {
-        root /var/www/generic-pages;
-        try_files /index.html =404;
+        alias /var/www/generic-pages/index.html;
         add_header X-Debug-Location "homepage" always;
     }
     
@@ -73,29 +72,25 @@ function buildDomainFragment(record) {
         return 301 /xx-g2/;
     }
     location = /xx-g2/ {
-        root /var/www/generic-pages;
-        try_files /xx-g2/index.html =404;
+        alias /var/www/generic-pages/xx-g2/index.html;
         add_header X-Debug-Location "xx-g2" always;
     }
     
     # Privacy page (HTML)
     location = /privacy {
-        root /var/www/generic-pages;
-        try_files /privacy.html =404;
+        alias /var/www/generic-pages/privacy.html;
         add_header X-Debug-Location "privacy" always;
     }
     
     # Terms page (HTML)
     location = /terms {
-        root /var/www/generic-pages;
-        try_files /terms.html =404;
+        alias /var/www/generic-pages/terms.html;
         add_header X-Debug-Location "terms" always;
     }
     
     # Contact page (HTML)
     location = /contact {
-        root /var/www/generic-pages;
-        try_files /contact.html =404;
+        alias /var/www/generic-pages/contact.html;
         add_header X-Debug-Location "contact" always;
     }
 `;
