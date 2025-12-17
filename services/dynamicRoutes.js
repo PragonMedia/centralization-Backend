@@ -83,6 +83,7 @@ function buildDomainFragment(record) {
         include fastcgi.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/privacy.php;
+        fastcgi_param REQUEST_URI /privacy;
         add_header X-Debug-Location "privacy" always;
     }
     
@@ -91,6 +92,7 @@ function buildDomainFragment(record) {
         include fastcgi.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/terms.php;
+        fastcgi_param REQUEST_URI /terms;
         add_header X-Debug-Location "terms" always;
     }
     
@@ -99,6 +101,7 @@ function buildDomainFragment(record) {
         include fastcgi.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/contact.php;
+        fastcgi_param REQUEST_URI /contact;
         add_header X-Debug-Location "contact" always;
     }
     
