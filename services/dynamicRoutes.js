@@ -78,39 +78,25 @@ function buildDomainFragment(record) {
         add_header X-Debug-Location "xx-g2" always;
     }
     
-    # Privacy page (PHP) - exact match with direct SCRIPT_FILENAME
+    # Privacy page (HTML)
     location = /privacy {
-        include fastcgi.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/privacy.php;
-        fastcgi_param REQUEST_URI /privacy;
+        root /var/www/generic-pages;
+        try_files /privacy.html =404;
         add_header X-Debug-Location "privacy" always;
     }
     
-    # Terms page (PHP) - exact match with direct SCRIPT_FILENAME
+    # Terms page (HTML)
     location = /terms {
-        include fastcgi.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/terms.php;
-        fastcgi_param REQUEST_URI /terms;
+        root /var/www/generic-pages;
+        try_files /terms.html =404;
         add_header X-Debug-Location "terms" always;
     }
     
-    # Contact page (PHP) - exact match with direct SCRIPT_FILENAME
+    # Contact page (HTML)
     location = /contact {
-        include fastcgi.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/contact.php;
-        fastcgi_param REQUEST_URI /contact;
+        root /var/www/generic-pages;
+        try_files /contact.html =404;
         add_header X-Debug-Location "contact" always;
-    }
-    
-    # Also handle with .php extension for flexibility
-    location ~ ^/(privacy|terms|contact)\\.php$ {
-        include fastcgi.conf;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/$1.php;
-        add_header X-Debug-Location "$1-php" always;
     }
 `;
 
