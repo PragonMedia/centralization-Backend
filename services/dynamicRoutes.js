@@ -71,13 +71,12 @@ function buildDomainFragment(record) {
         add_header X-Debug-Location "homepage" always;
     }
     
-    # G2 page (HTML) - exact match first, then regex for trailing slash
+    # G2 page (HTML) - exact match first, then serve with alias
     location = /xx-g2 {
         return 301 /xx-g2/;
     }
     location = /xx-g2/ {
-        root /var/www/generic-pages;
-        try_files /xx-g2/index.html =404;
+        alias /var/www/generic-pages/xx-g2/index.html;
         default_type text/html;
         add_header X-Debug-Location "xx-g2" always;
     }
