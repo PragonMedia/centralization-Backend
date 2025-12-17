@@ -61,17 +61,14 @@ function buildDomainFragment(record) {
     # GENERIC PAGES (shared across all domains)
     # ===============================
     
-    # Homepage (root) - rewrite to index.html and serve it
+    # Homepage (root) - use alias pointing directly to file
     location = / {
-        rewrite ^ /index.html last;
-    }
-    location = /index.html {
-        root /var/www/generic-pages;
+        alias /var/www/generic-pages/index.html;
         default_type text/html;
         add_header X-Debug-Location "homepage" always;
     }
     
-    # G2 page (HTML) - exact match first, then serve with alias
+    # G2 page (HTML) - exact match first, then regex for trailing slash
     location = /xx-g2 {
         return 301 /xx-g2/;
     }
