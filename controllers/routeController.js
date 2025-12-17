@@ -117,6 +117,16 @@ exports.createDomain = async (req, res) => {
   let sanitizedDomain = null;
 
   try {
+    // Handle both array and object request bodies (for frontend compatibility)
+    const requestData = Array.isArray(req.body) ? req.body[0] : req.body;
+    
+    if (!requestData || typeof requestData !== 'object') {
+      return res.status(400).json({
+        error: "Invalid request body",
+        details: "Request body must be an object or an array with one object",
+      });
+    }
+
     const {
       domain,
       assignedTo,
@@ -125,7 +135,7 @@ exports.createDomain = async (req, res) => {
       platform,
       rtkID,
       certificationTags,
-    } = req.body;
+    } = requestData;
 
     console.log("🔍 STEP 1 — Validating request body");
 
