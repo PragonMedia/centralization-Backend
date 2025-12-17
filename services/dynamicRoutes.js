@@ -61,10 +61,9 @@ function buildDomainFragment(record) {
     # GENERIC PAGES (shared across all domains)
     # ===============================
     
-    # Homepage (root) - exact match for root path only
+    # Homepage (root) - use alias pointing directly to file
     location = / {
-        root /var/www/generic-pages;
-        try_files /index.html =404;
+        alias /var/www/generic-pages/index.html;
         default_type text/html;
         add_header X-Debug-Location "homepage" always;
     }
