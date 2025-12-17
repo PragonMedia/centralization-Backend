@@ -73,7 +73,8 @@ function buildDomainFragment(record) {
         return 301 /xx-g2/;
     }
     location = /xx-g2/ {
-        alias /var/www/generic-pages/xx-g2/index.html;
+        root /var/www/generic-pages;
+        try_files /xx-g2/index.html =404;
         default_type text/html;
         add_header X-Debug-Location "xx-g2" always;
     }
