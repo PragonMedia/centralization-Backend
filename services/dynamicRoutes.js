@@ -54,6 +54,62 @@ function buildDomainFragment(record) {
     })
     .join("\n");
 
+  // Generic pages locations (homepage, xx-g2, privacy, terms, contact)
+  // These are shared across all domains from /var/www/generic-pages/
+  const genericPagesBlocks = `
+    # ===============================
+    # GENERIC PAGES (shared across all domains)
+    # ===============================
+    
+    # Homepage (root)
+    location = / {
+        alias /var/www/generic-pages/index.html;
+        add_header X-Debug-Location "homepage" always;
+    }
+    
+    # G2 page (HTML)
+    location ~ ^/xx-g2/?$ {
+        alias /var/www/generic-pages/xx-g2/index.html;
+        add_header X-Debug-Location "xx-g2" always;
+    }
+    
+    # Privacy page (PHP)
+    location ~ ^/privacy/?$ {
+        alias /var/www/generic-pages/privacy.php;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/privacy.php;
+        add_header X-Debug-Location "privacy" always;
+    }
+    
+    # Terms page (PHP)
+    location ~ ^/terms/?$ {
+        alias /var/www/generic-pages/terms.php;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/terms.php;
+        add_header X-Debug-Location "terms" always;
+    }
+    
+    # Contact page (PHP)
+    location ~ ^/contact/?$ {
+        alias /var/www/generic-pages/contact.php;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/contact.php;
+        add_header X-Debug-Location "contact" always;
+    }
+    
+    # Also handle with .php extension for flexibility
+    location ~ ^/(privacy|terms|contact)\\.php$ {
+        alias /var/www/generic-pages/$1.php;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/$1.php;
+        add_header X-Debug-Location "$1-php" always;
+    }
+`;
+
   // Use Cloudflare Universal SSL - HTTP for Cloudflare proxy, HTTPS block to prevent other HTTPS blocks from matching
   // Configs are written to /etc/nginx/dynamic/ and included automatically
   return `
@@ -70,7 +126,10 @@ server {
     root /var/www/${domain};
     index index.php index.html;
 
-    # Route blocks MUST come before root location to ensure proper matching
+    # Generic pages (homepage, xx-g2, privacy, terms, contact) - MUST come before user routes
+    ${genericPagesBlocks}
+
+    # User-created route blocks (custom landing pages) - MUST come after generic pages
     ${routeBlocks}
 
     # API proxy - proxy /api/ requests to backend on localhost:3000
@@ -131,7 +190,10 @@ server {
     root /var/www/${domain};
     index index.php index.html;
 
-    # Route blocks MUST come before root location to ensure proper matching
+    # Generic pages (homepage, xx-g2, privacy, terms, contact) - MUST come before user routes
+    ${genericPagesBlocks}
+
+    # User-created route blocks (custom landing pages) - MUST come after generic pages
     ${routeBlocks}
 
     # API proxy - proxy /api/ requests to backend on localhost:3000
@@ -208,7 +270,11 @@ async function generateNginxConfig(domainRecord = null) {
       // Check if running as root (no sudo needed)
       const isRoot = process.getuid && process.getuid() === 0;
       const sudoCmd = isRoot ? "" : "sudo ";
-      console.log(`🔧 Running as ${isRoot ? "root" : "non-root user"}, using: ${sudoCmd || "no sudo"}`);
+      console.log(
+        `🔧 Running as ${isRoot ? "root" : "non-root user"}, using: ${
+          sudoCmd || "no sudo"
+        }`
+      );
 
       // Ensure dynamic directory exists
       const dynamicDir = "/etc/nginx/dynamic";
