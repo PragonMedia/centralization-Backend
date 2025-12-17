@@ -61,39 +61,41 @@ function buildDomainFragment(record) {
     # GENERIC PAGES (shared across all domains)
     # ===============================
     
-    # Homepage (root)
+    # Homepage (root) - use root + try_files instead of alias for exact match
     location = / {
-        alias /var/www/generic-pages/index.html;
+        root /var/www/generic-pages;
+        try_files /index.html =404;
         add_header X-Debug-Location "homepage" always;
     }
     
-    # G2 page (HTML)
-    location ~ ^/xx-g2/?$ {
-        alias /var/www/generic-pages/xx-g2/index.html;
+    # G2 page (HTML) - exact match first, then regex for trailing slash
+    location = /xx-g2 {
+        return 301 /xx-g2/;
+    }
+    location = /xx-g2/ {
+        root /var/www/generic-pages;
+        try_files /xx-g2/index.html =404;
         add_header X-Debug-Location "xx-g2" always;
     }
     
-    # Privacy page (PHP)
-    location ~ ^/privacy/?$ {
-        alias /var/www/generic-pages/privacy.php;
+    # Privacy page (PHP) - exact match with direct SCRIPT_FILENAME
+    location = /privacy {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/privacy.php;
         add_header X-Debug-Location "privacy" always;
     }
     
-    # Terms page (PHP)
-    location ~ ^/terms/?$ {
-        alias /var/www/generic-pages/terms.php;
+    # Terms page (PHP) - exact match with direct SCRIPT_FILENAME
+    location = /terms {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/terms.php;
         add_header X-Debug-Location "terms" always;
     }
     
-    # Contact page (PHP)
-    location ~ ^/contact/?$ {
-        alias /var/www/generic-pages/contact.php;
+    # Contact page (PHP) - exact match with direct SCRIPT_FILENAME
+    location = /contact {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/contact.php;
@@ -102,7 +104,6 @@ function buildDomainFragment(record) {
     
     # Also handle with .php extension for flexibility
     location ~ ^/(privacy|terms|contact)\\.php$ {
-        alias /var/www/generic-pages/$1.php;
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME /var/www/generic-pages/$1.php;
