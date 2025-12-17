@@ -64,6 +64,7 @@ function buildDomainFragment(record) {
     # Homepage (root) - use alias for exact match
     location = / {
         alias /var/www/generic-pages/index.html;
+        default_type text/html;
         add_header X-Debug-Location "homepage" always;
     }
     
@@ -73,24 +74,28 @@ function buildDomainFragment(record) {
     }
     location = /xx-g2/ {
         alias /var/www/generic-pages/xx-g2/index.html;
+        default_type text/html;
         add_header X-Debug-Location "xx-g2" always;
     }
     
     # Privacy page (HTML)
     location = /privacy {
         alias /var/www/generic-pages/privacy.html;
+        default_type text/html;
         add_header X-Debug-Location "privacy" always;
     }
     
     # Terms page (HTML)
     location = /terms {
         alias /var/www/generic-pages/terms.html;
+        default_type text/html;
         add_header X-Debug-Location "terms" always;
     }
     
     # Contact page (HTML)
     location = /contact {
         alias /var/www/generic-pages/contact.html;
+        default_type text/html;
         add_header X-Debug-Location "contact" always;
     }
 `;
