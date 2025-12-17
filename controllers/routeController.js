@@ -641,6 +641,12 @@ exports.createRoute = async (req, res) => {
         .json({ error: "This route already exists for this domain." });
     }
 
+    // Update domain-level rtkID if it's null and route has rtkID
+    if ((!domainDoc.rtkID || domainDoc.rtkID === null) && rtkID) {
+      domainDoc.rtkID = rtkID;
+      console.log(`📝 Updating domain-level rtkID to ${rtkID} from route creation`);
+    }
+
     // Add route to existing domain
     domainDoc.routes.push(newRoute);
 
