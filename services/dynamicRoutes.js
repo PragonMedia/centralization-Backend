@@ -61,11 +61,10 @@ function buildDomainFragment(record) {
     # GENERIC PAGES (shared across all domains)
     # ===============================
     
-    # Homepage (root) - use root with index for exact match
+    # Homepage (root) - use root with index (no try_files needed for exact match)
     location = / {
         root /var/www/generic-pages;
         index index.html;
-        try_files /index.html =404;
         default_type text/html;
         add_header X-Debug-Location "homepage" always;
     }
