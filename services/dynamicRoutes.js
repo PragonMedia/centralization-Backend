@@ -78,7 +78,7 @@ function buildDomainFragment(record) {
         root /var/www/generic-pages;
         # Try the requested file, then directory, then index.html, then 404
         try_files $uri $uri/ /xx-g2/index.html =404;
-        default_type text/html;
+        # Nginx will auto-detect MIME type for images/CSS/JS, only set HTML for index.html fallback
         add_header X-Debug-Location "xx-g2" always;
     }
     
