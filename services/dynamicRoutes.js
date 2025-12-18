@@ -69,20 +69,17 @@ function buildDomainFragment(record) {
         add_header X-Debug-Location "homepage" always;
     }
     
-    # G2 page (HTML) - exact match first, then regex for trailing slash
+    # G2 page (HTML) - redirect without trailing slash
     location = /xx-g2 {
         return 301 /xx-g2/;
     }
-    location = /xx-g2/ {
-        root /var/www/generic-pages;
-        try_files /xx-g2/index.html =404;
-        default_type text/html;
-        add_header X-Debug-Location "xx-g2" always;
-    }
-    # Serve static assets for xx-g2 (images, CSS, JS, etc.)
+    # G2 page and static assets - prefix match handles both index.html and static files
     location ^~ /xx-g2/ {
         root /var/www/generic-pages;
-        try_files $uri $uri/ =404;
+        # Try the requested file, then directory, then index.html, then 404
+        try_files $uri $uri/ /xx-g2/index.html =404;
+        default_type text/html;
+        add_header X-Debug-Location "xx-g2" always;
     }
     
     # Privacy page (HTML)
