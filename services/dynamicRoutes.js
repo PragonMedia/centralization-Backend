@@ -38,10 +38,11 @@ function buildDomainFragment(record) {
         
         # Handle PHP files with nested location
         location ~ \\.php$ {
-            include snippets/fastcgi-php.conf;
+            include fastcgi.conf;
             fastcgi_pass unix:/run/php/php8.4-fpm.sock;
             # Use $request_filename which nginx resolves based on alias
             fastcgi_param SCRIPT_FILENAME $request_filename;
+            fastcgi_param REQUEST_URI $request_uri;
         }
         
         # Handle static files and directory fallbacks
