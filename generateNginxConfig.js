@@ -73,10 +73,22 @@ async function generateConfigForDomain(domainName) {
 }
 
 const domainName = process.argv[2];
-if (!domainName) {
-  console.error("Usage: node generateNginxConfig.js <domain>");
-  process.exit(1);
-}
 
-generateConfigForDomain(domainName);
+if (!domainName) {
+  // If no domain provided, regenerate all domains
+  console.log("🔄 Regenerating nginx configs for all domains...\n");
+  const { generateNginxConfig } = require("./services/dynamicRoutes");
+  
+  generateNginxConfig()
+    .then(() => {
+      console.log("\n✅ All domains regenerated successfully");
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error("❌ Error regenerating all domains:", error.message);
+      process.exit(1);
+    });
+} else {
+  generateConfigForDomain(domainName);
+}
 
