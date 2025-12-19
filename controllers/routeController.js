@@ -914,7 +914,7 @@ exports.updateDomainName = async (req, res) => {
 
 // EDIT SUB ROUTE DATA
 exports.updateRouteData = async (req, res) => {
-  const { domain, route, newRoute, template, newTemplate, createdBy } =
+  const { domain, route, newRoute, template, newTemplate, createdBy, rtkID, ringbaID, phoneNumber } =
     req.body;
 
   try {
@@ -950,11 +950,17 @@ exports.updateRouteData = async (req, res) => {
     const oldValues = {
       oldRoute: route,
       oldTemplate: routeToUpdate.template,
+      oldRtkID: routeToUpdate.rtkID || null,
+      oldRingbaID: routeToUpdate.ringbaID || null,
+      oldPhoneNumber: routeToUpdate.phoneNumber || null,
     };
 
     const newValues = {
       newRoute: route,
       newTemplate: routeToUpdate.template,
+      newRtkID: routeToUpdate.rtkID || null,
+      newRingbaID: routeToUpdate.ringbaID || null,
+      newPhoneNumber: routeToUpdate.phoneNumber || null,
     };
 
     // Handle route path update
@@ -976,13 +982,34 @@ exports.updateRouteData = async (req, res) => {
       routeToUpdate.template = newTemplate;
     }
 
+    // Handle rtkID update
+    if (rtkID !== undefined) {
+      newValues.newRtkID = rtkID;
+      routeToUpdate.rtkID = rtkID || null;
+    }
+
+    // Handle ringbaID update
+    if (ringbaID !== undefined) {
+      newValues.newRingbaID = ringbaID;
+      routeToUpdate.ringbaID = ringbaID || null;
+    }
+
+    // Handle phoneNumber update
+    if (phoneNumber !== undefined) {
+      newValues.newPhoneNumber = phoneNumber;
+      routeToUpdate.phoneNumber = phoneNumber || null;
+    }
+
     await domainDoc.save();
     await generateNginxConfig();
 
     // Check if any values actually changed
     const hasChanges =
       oldValues.oldRoute !== newValues.newRoute ||
-      oldValues.oldTemplate !== newValues.newTemplate;
+      oldValues.oldTemplate !== newValues.newTemplate ||
+      oldValues.oldRtkID !== newValues.newRtkID ||
+      oldValues.oldRingbaID !== newValues.newRingbaID ||
+      oldValues.oldPhoneNumber !== newValues.newPhoneNumber;
 
     res.status(200).json({
       message: "Route data updated successfully.",
