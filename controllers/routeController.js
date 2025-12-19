@@ -119,8 +119,8 @@ exports.createDomain = async (req, res) => {
   try {
     // Handle both array and object request bodies (for frontend compatibility)
     const requestData = Array.isArray(req.body) ? req.body[0] : req.body;
-    
-    if (!requestData || typeof requestData !== 'object') {
+
+    if (!requestData || typeof requestData !== "object") {
       return res.status(400).json({
         error: "Invalid request body",
         details: "Request body must be an object or an array with one object",
@@ -654,7 +654,9 @@ exports.createRoute = async (req, res) => {
     // Update domain-level rtkID if it's null and route has rtkID
     if ((!domainDoc.rtkID || domainDoc.rtkID === null) && rtkID) {
       domainDoc.rtkID = rtkID;
-      console.log(`📝 Updating domain-level rtkID to ${rtkID} from route creation`);
+      console.log(
+        `📝 Updating domain-level rtkID to ${rtkID} from route creation`
+      );
     }
 
     // Add route to existing domain
@@ -690,19 +692,29 @@ exports.createRoute = async (req, res) => {
     }
 
     // Regenerate nginx config with new route (uses alias to point to template directory)
-    console.log(`🔄 Regenerating nginx config for ${domainDoc.domain} with new route: ${route}`);
+    console.log(
+      `🔄 Regenerating nginx config for ${domainDoc.domain} with new route: ${route}`
+    );
     try {
       const nginxResult = await generateNginxConfig(domainDoc);
       if (nginxResult && nginxResult.success) {
-        console.log(`✅ Nginx config regenerated successfully for ${domainDoc.domain}`);
+        console.log(
+          `✅ Nginx config regenerated successfully for ${domainDoc.domain}`
+        );
       } else {
-        console.warn(`⚠️  Nginx config regeneration completed with warnings for ${domainDoc.domain}`);
+        console.warn(
+          `⚠️  Nginx config regeneration completed with warnings for ${domainDoc.domain}`
+        );
       }
     } catch (nginxErr) {
-      console.error(`❌ Failed to regenerate nginx config: ${nginxErr.message}`);
+      console.error(
+        `❌ Failed to regenerate nginx config: ${nginxErr.message}`
+      );
       console.error(`❌ Nginx error stack: ${nginxErr.stack}`);
       // Don't fail the route creation if nginx config fails - log warning but continue
-      console.warn(`⚠️  Route created but nginx config needs manual regeneration`);
+      console.warn(
+        `⚠️  Route created but nginx config needs manual regeneration`
+      );
     }
 
     res.status(201).json({
@@ -914,8 +926,17 @@ exports.updateDomainName = async (req, res) => {
 
 // EDIT SUB ROUTE DATA
 exports.updateRouteData = async (req, res) => {
-  const { domain, route, newRoute, template, newTemplate, createdBy, rtkID, ringbaID, phoneNumber } =
-    req.body;
+  const {
+    domain,
+    route,
+    newRoute,
+    template,
+    newTemplate,
+    createdBy,
+    rtkID,
+    ringbaID,
+    phoneNumber,
+  } = req.body;
 
   try {
     // Validate required fields
@@ -1182,8 +1203,31 @@ exports.deleteDomain = async (req, res) => {
     // 3. Delete domain from database
     const deleted = await Domain.findOneAndDelete({ domain });
 
-    // 4. Regenerate nginx config
-    await generateNginxConfig();
+    // 4. Delete Nginx config file for this domain
+    const { execSync } = require("child_process");
+    const configPath = `/etc/nginx/dynamic/${domain}.conf`;
+    try {
+      const fs = require("fs");
+      if (fs.existsSync(configPath)) {
+        execSync(`sudo rm -f ${configPath}`, { stdio: "inherit" });
+        console.log(`✅ Deleted Nginx config: ${configPath}`);
+      }
+    } catch (nginxCleanupError) {
+      console.warn(
+        `⚠️  Could not delete Nginx config file: ${nginxCleanupError.message}`
+      );
+      // Continue - this is not critical
+    }
+
+    // 5. Test and reload nginx
+    try {
+      execSync("sudo nginx -t", { stdio: "inherit" });
+      execSync("sudo systemctl reload nginx", { stdio: "inherit" });
+      console.log(`✅ Nginx reloaded after domain deletion`);
+    } catch (nginxError) {
+      console.warn(`⚠️  Nginx reload failed: ${nginxError.message}`);
+      // Continue - config might still be valid
+    }
 
     res.status(200).json({
       message: "Domain and its routes deleted successfully.",
