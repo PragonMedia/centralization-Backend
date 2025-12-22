@@ -164,6 +164,15 @@ exports.createDomain = async (req, res) => {
       });
     }
 
+    // Validate ID format (must be non-empty string, but allow any characters including spaces and special chars)
+    if (typeof id !== "string" || id.trim().length === 0) {
+      console.error("❌ Validation failed: Invalid ID format");
+      return res.status(400).json({
+        error: "Invalid ID format",
+        details: "ID must be a non-empty string",
+      });
+    }
+
     // Sanitize domain name (trim whitespace only, keep original case and hyphens)
     sanitizedDomain = domain.trim();
     console.log(`✅ Domain validated: ${sanitizedDomain}`);
@@ -789,10 +798,10 @@ exports.updateDomainName = async (req, res) => {
 
     // Update ID if provided
     if (newId !== undefined) {
-      if (!/^\d{3}-\d{3}$/.test(newId)) {
+      // Only validate that ID is a non-empty string (allow any characters including spaces and special chars)
+      if (typeof newId !== "string" || newId.trim().length === 0) {
         return res.status(400).json({
-          error:
-            "ID must be in format XXX-XXX (6 digits with dash). Example: 123-456",
+          error: "ID must be a non-empty string",
         });
       }
       newValues.id = newId;
