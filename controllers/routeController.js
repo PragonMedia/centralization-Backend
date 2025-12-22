@@ -631,27 +631,22 @@ exports.createRoute = async (req, res) => {
     const loggedInUserEmail = loggedInUser.email;
     const loggedInUserRole = loggedInUser.role;
 
-    // Validate required fields
+    // Validate required fields (createdBy is optional - we'll set it from JWT)
     if (
       !domain ||
       !route ||
       !template ||
       !organization ||
-      !createdBy ||
       !platform
     ) {
       return res.status(400).json({
         error:
-          "Missing required fields. Required: domain, route, template, organization, createdBy, platform",
+          "Missing required fields. Required: domain, route, template, organization, platform",
       });
     }
 
-    // Validate that createdBy matches logged-in user
-    if (createdBy !== loggedInUserEmail) {
-      return res.status(403).json({
-        error: "createdBy must match the logged-in user's email.",
-      });
-    }
+    // Set createdBy to logged-in user's email (ignore what frontend sends)
+    const routeCreatedBy = loggedInUserEmail;
 
     // Validate organization
     if (!["paragon media", "elite", "fluent"].includes(organization)) {
@@ -682,7 +677,7 @@ exports.createRoute = async (req, res) => {
       ringbaID,
       rtkID: rtkID || null,
       phoneNumber,
-      createdBy,
+      createdBy: routeCreatedBy, // Use logged-in user's email
       platform,
     };
 
@@ -1019,17 +1014,10 @@ exports.updateRouteData = async (req, res) => {
     const loggedInUserEmail = loggedInUser.email;
     const loggedInUserRole = loggedInUser.role;
 
-    // Validate required fields
-    if (!domain || !route || !createdBy) {
+    // Validate required fields (createdBy is optional - we'll use logged-in user)
+    if (!domain || !route) {
       return res.status(400).json({
-        error: "Missing required fields. Required: domain, route, createdBy",
-      });
-    }
-
-    // Validate that createdBy matches logged-in user
-    if (createdBy !== loggedInUserEmail) {
-      return res.status(403).json({
-        error: "createdBy must match the logged-in user's email.",
+        error: "Missing required fields. Required: domain, route",
       });
     }
 
@@ -1348,7 +1336,6 @@ exports.deleteDomain = async (req, res) => {
 exports.deleteSubRoute = async (req, res) => {
   try {
     const { domain, route } = req.params;
-    const { createdBy } = req.body;
 
     // Extract logged-in user from JWT token
     const loggedInUser = await getUserFromToken(req);
@@ -1360,13 +1347,6 @@ exports.deleteSubRoute = async (req, res) => {
 
     const loggedInUserEmail = loggedInUser.email;
     const loggedInUserRole = loggedInUser.role;
-
-    // Validate that createdBy matches logged-in user (if provided)
-    if (createdBy && createdBy !== loggedInUserEmail) {
-      return res.status(403).json({
-        error: "createdBy must match the logged-in user's email.",
-      });
-    }
 
     const domainDoc = await Domain.findOne({ domain });
 
