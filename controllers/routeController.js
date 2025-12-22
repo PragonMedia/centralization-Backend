@@ -1,4 +1,6 @@
 const Domain = require("../models/domainModel");
+const User = require("../models/userModel");
+const jwt = require("jsonwebtoken");
 const { generateNginxConfig } = require("../services/dynamicRoutes");
 const cloudflareService = require("../services/cloudflareService");
 const redtrackService = require("../services/redtrackService");
@@ -10,6 +12,35 @@ const {
 const templateService = require("../services/templateService");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 const axios = require("axios");
+
+// Helper function to extract user from JWT token
+const getUserFromToken = async (req) => {
+  try {
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (!token) {
+      return null;
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || "your-secret-key");
+    if (!decoded || !decoded.userId) {
+      return null;
+    }
+
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return null;
+    }
+
+    return {
+      email: user.email,
+      role: user.role,
+      userId: user._id.toString(),
+    };
+  } catch (error) {
+    console.error("Error extracting user from token:", error);
+    return null;
+  }
+};
 
 // GET ALL DOMAINS with sorting and filtering
 exports.getAllDomains = async (req, res) => {
@@ -589,6 +620,17 @@ exports.createRoute = async (req, res) => {
   } = req.body;
 
   try {
+    // Extract logged-in user from JWT token
+    const loggedInUser = await getUserFromToken(req);
+    if (!loggedInUser) {
+      return res.status(401).json({
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const loggedInUserEmail = loggedInUser.email;
+    const loggedInUserRole = loggedInUser.role;
+
     // Validate required fields
     if (
       !domain ||
@@ -601,6 +643,13 @@ exports.createRoute = async (req, res) => {
       return res.status(400).json({
         error:
           "Missing required fields. Required: domain, route, template, organization, createdBy, platform",
+      });
+    }
+
+    // Validate that createdBy matches logged-in user
+    if (createdBy !== loggedInUserEmail) {
+      return res.status(403).json({
+        error: "createdBy must match the logged-in user's email.",
       });
     }
 
@@ -645,11 +694,22 @@ exports.createRoute = async (req, res) => {
       });
     }
 
-    // Check if user has access to this domain
-    if (domainDoc.assignedTo !== createdBy) {
-      return res
-        .status(403)
-        .json({ error: "You don't have access to modify this domain." });
+    // Role-based access control
+    if (loggedInUserRole === "mediaBuyer") {
+      // MediaBuyer can only create routes on domains assigned to them
+      if (domainDoc.assignedTo !== loggedInUserEmail) {
+        return res.status(403).json({
+          error: "You don't have access to modify this domain.",
+        });
+      }
+    } else if (["tech", "ceo", "admin"].includes(loggedInUserRole)) {
+      // Tech, CEO, and Admin can create routes on any domain
+      // No additional check needed
+    } else {
+      // Unknown role - deny access
+      return res.status(403).json({
+        error: "You don't have permission to create routes.",
+      });
     }
 
     // Prevent duplicate route for domain
@@ -948,10 +1008,28 @@ exports.updateRouteData = async (req, res) => {
   } = req.body;
 
   try {
+    // Extract logged-in user from JWT token
+    const loggedInUser = await getUserFromToken(req);
+    if (!loggedInUser) {
+      return res.status(401).json({
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const loggedInUserEmail = loggedInUser.email;
+    const loggedInUserRole = loggedInUser.role;
+
     // Validate required fields
     if (!domain || !route || !createdBy) {
       return res.status(400).json({
         error: "Missing required fields. Required: domain, route, createdBy",
+      });
+    }
+
+    // Validate that createdBy matches logged-in user
+    if (createdBy !== loggedInUserEmail) {
+      return res.status(403).json({
+        error: "createdBy must match the logged-in user's email.",
       });
     }
 
@@ -961,10 +1039,21 @@ exports.updateRouteData = async (req, res) => {
       return res.status(404).json({ error: "Domain not found." });
     }
 
-    // Check if user has access to this domain
-    if (domainDoc.assignedTo !== createdBy) {
+    // Role-based access control
+    if (loggedInUserRole === "mediaBuyer") {
+      // MediaBuyer can only update routes on domains assigned to them
+      if (domainDoc.assignedTo !== loggedInUserEmail) {
+        return res.status(403).json({
+          error: "You don't have access to modify this domain.",
+        });
+      }
+    } else if (["tech", "ceo", "admin"].includes(loggedInUserRole)) {
+      // Tech, CEO, and Admin can update routes on any domain
+      // No additional check needed
+    } else {
+      // Unknown role - deny access
       return res.status(403).json({
-        error: "You don't have access to modify this domain. Media Buyer",
+        error: "You don't have permission to update routes.",
       });
     }
 
@@ -1261,18 +1350,47 @@ exports.deleteSubRoute = async (req, res) => {
     const { domain, route } = req.params;
     const { createdBy } = req.body;
 
+    // Extract logged-in user from JWT token
+    const loggedInUser = await getUserFromToken(req);
+    if (!loggedInUser) {
+      return res.status(401).json({
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const loggedInUserEmail = loggedInUser.email;
+    const loggedInUserRole = loggedInUser.role;
+
+    // Validate that createdBy matches logged-in user (if provided)
+    if (createdBy && createdBy !== loggedInUserEmail) {
+      return res.status(403).json({
+        error: "createdBy must match the logged-in user's email.",
+      });
+    }
+
     const domainDoc = await Domain.findOne({ domain });
 
     if (!domainDoc) {
       return res.status(404).json({ error: "Domain not found." });
     }
 
-    // Check if user has access to this domain
-    // if (domainDoc.createdBy !== createdBy) {
-    //   return res
-    //     .status(403)
-    //     .json({ error: "You don't have access to modify this domain." });
-    // }
+    // Role-based access control
+    if (loggedInUserRole === "mediaBuyer") {
+      // MediaBuyer can only delete routes on domains assigned to them
+      if (domainDoc.assignedTo !== loggedInUserEmail) {
+        return res.status(403).json({
+          error: "You don't have access to modify this domain.",
+        });
+      }
+    } else if (["tech", "ceo", "admin"].includes(loggedInUserRole)) {
+      // Tech, CEO, and Admin can delete routes on any domain
+      // No additional check needed
+    } else {
+      // Unknown role - deny access
+      return res.status(403).json({
+        error: "You don't have permission to delete routes.",
+      });
+    }
 
     const updatedDomain = await Domain.findOneAndUpdate(
       { domain },
