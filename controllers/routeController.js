@@ -1246,7 +1246,17 @@ exports.getDomainRouteDetails = async (req, res) => {
 exports.deleteDomain = async (req, res) => {
   try {
     const { domain } = req.params;
-    const { createdBy } = req.body;
+
+    // Extract logged-in user from JWT token
+    const loggedInUser = await getUserFromToken(req);
+    if (!loggedInUser) {
+      return res.status(401).json({
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const loggedInUserEmail = loggedInUser.email;
+    const loggedInUserRole = loggedInUser.role;
 
     const domainDoc = await Domain.findOne({ domain });
 
@@ -1254,12 +1264,27 @@ exports.deleteDomain = async (req, res) => {
       return res.status(404).json({ error: "Domain not found." });
     }
 
-    // Check if user has access to this domain
-    // if (domainDoc.createdBy !== createdBy) {
-    //   return res
-    //     .status(403)
-    //     .json({ error: "You don't have access to delete this domain." });
-    // }
+    // Role-based access control
+    if (loggedInUserRole === "mediaBuyer") {
+      // MediaBuyer can only delete domains assigned to them
+      if (domainDoc.assignedTo !== loggedInUserEmail) {
+        return res.status(403).json({
+          error: "You don't have access to delete this domain.",
+        });
+      }
+    } else if (["tech", "ceo", "admin"].includes(loggedInUserRole)) {
+      // Tech, CEO, and Admin can delete any domain
+      // No additional check needed
+    } else {
+      // Unknown role - deny access
+      return res.status(403).json({
+        error: "You don't have permission to delete domains.",
+      });
+    }
+
+    console.log(
+      `🗑️  Deleting domain: ${domain} (requested by: ${loggedInUserEmail}, role: ${loggedInUserRole})`
+    );
 
     // --- Cleanup Cloudflare & RedTrack resources ---
     try {
@@ -1270,53 +1295,75 @@ exports.deleteDomain = async (req, res) => {
           domainDoc.cloudflareZoneId,
           domain
         );
+        console.log(`✅ Cloudflare DNS records deleted for ${domain}`);
+      } else {
+        console.log(`ℹ️  No Cloudflare zone ID found for ${domain}, skipping DNS cleanup`);
       }
 
       // 2. Delete domain from RedTrack
       if (domainDoc.redtrackDomainId) {
         console.log(`🔄 Deleting RedTrack domain for ${domain}...`);
         await redtrackService.deleteRedTrackDomain(domainDoc.redtrackDomainId);
+        console.log(`✅ RedTrack domain deleted for ${domain}`);
+      } else {
+        console.log(`ℹ️  No RedTrack domain ID found for ${domain}, skipping RedTrack cleanup`);
       }
     } catch (cleanupError) {
       console.error(
         `⚠️  Error during cleanup for ${domain}:`,
         cleanupError.message
       );
+      console.error(`⚠️  Cleanup error stack:`, cleanupError.stack);
       // Continue with domain deletion even if cleanup fails
       // This ensures the domain is removed from database
     }
 
     // 3. Delete domain from database
     const deleted = await Domain.findOneAndDelete({ domain });
+    if (!deleted) {
+      return res.status(404).json({ error: "Domain not found in database." });
+    }
+    console.log(`✅ Domain deleted from database: ${domain}`);
 
     // 4. Delete Nginx config file for this domain
     const { execSync } = require("child_process");
+    const fs = require("fs");
     const configPath = `/etc/nginx/dynamic/${domain}.conf`;
     try {
-      const fs = require("fs");
       if (fs.existsSync(configPath)) {
         execSync(`sudo rm -f ${configPath}`, { stdio: "inherit" });
         console.log(`✅ Deleted Nginx config: ${configPath}`);
+      } else {
+        console.log(`ℹ️  Nginx config file not found: ${configPath} (may have been already deleted)`);
       }
     } catch (nginxCleanupError) {
       console.warn(
         `⚠️  Could not delete Nginx config file: ${nginxCleanupError.message}`
       );
+      console.warn(`⚠️  Nginx cleanup error stack:`, nginxCleanupError.stack);
       // Continue - this is not critical
     }
 
     // 5. Test and reload nginx
     try {
+      console.log(`🧪 Testing nginx configuration...`);
       execSync("sudo nginx -t", { stdio: "inherit" });
+      console.log(`✅ Nginx config test passed`);
+      console.log(`🔄 Reloading nginx...`);
       execSync("sudo systemctl reload nginx", { stdio: "inherit" });
-      console.log(`✅ Nginx reloaded after domain deletion`);
+      console.log(`✅ Nginx reloaded successfully after domain deletion`);
     } catch (nginxError) {
-      console.warn(`⚠️  Nginx reload failed: ${nginxError.message}`);
-      // Continue - config might still be valid
+      console.error(`❌ Nginx reload failed: ${nginxError.message}`);
+      if (nginxError.stdout) console.error(`stdout: ${nginxError.stdout}`);
+      if (nginxError.stderr) console.error(`stderr: ${nginxError.stderr}`);
+      console.warn(`⚠️  Domain deleted but nginx reload failed - manual reload may be needed`);
+      // Continue - domain is already deleted from DB
     }
 
     res.status(200).json({
       message: "Domain and its routes deleted successfully.",
+      domain: domain,
+      deletedBy: loggedInUserEmail,
       cleanup: {
         cloudflare: domainDoc.cloudflareZoneId
           ? "DNS records deleted"
@@ -1324,11 +1371,21 @@ exports.deleteDomain = async (req, res) => {
         redtrack: domainDoc.redtrackDomainId
           ? "Domain deleted"
           : "No RedTrack domain",
+        nginx: "Config file deleted and nginx reloaded",
       },
     });
   } catch (err) {
-    console.error("Error deleting domain:", err);
-    res.status(500).json({ error: "Server error." });
+    console.error("=".repeat(80));
+    console.error("❌ DOMAIN DELETION ERROR");
+    console.error("Domain:", req.params.domain);
+    console.error("Error name:", err.name);
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    console.error("=".repeat(80));
+    res.status(500).json({ 
+      error: "Server error while deleting domain.",
+      details: err.message 
+    });
   }
 };
 
@@ -1384,7 +1441,31 @@ exports.deleteSubRoute = async (req, res) => {
         .json({ error: "Route not found under this domain." });
     }
 
-    await generateNginxConfig();
+    // Regenerate nginx config for ONLY this domain (not all domains)
+    console.log(
+      `🔄 Regenerating nginx config for ${domain} after route deletion: ${route}`
+    );
+    try {
+      const nginxResult = await generateNginxConfig(updatedDomain);
+      if (nginxResult && nginxResult.success) {
+        console.log(
+          `✅ Nginx config regenerated successfully for ${domain} (route ${route} removed)`
+        );
+      } else {
+        console.warn(
+          `⚠️  Nginx config regeneration completed with warnings for ${domain}`
+        );
+      }
+    } catch (nginxErr) {
+      console.error(
+        `❌ Failed to regenerate nginx config: ${nginxErr.message}`
+      );
+      console.error(`❌ Nginx error stack: ${nginxErr.stack}`);
+      // Don't fail the route deletion if nginx config fails - log warning but continue
+      console.warn(
+        `⚠️  Route deleted but nginx config needs manual regeneration`
+      );
+    }
 
     res.status(200).json({
       message: `Route '${route}' deleted from domain '${domain}'.`,
