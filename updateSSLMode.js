@@ -58,3 +58,5 @@ if (!["full", "flexible", "strict"].includes(sslMode)) {
 
 updateSSLModeForDomain(domain, sslMode).then(() => process.exit(0)).catch(() => process.exit(1));
 
+
+

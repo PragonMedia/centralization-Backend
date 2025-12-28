@@ -21,7 +21,10 @@ const getUserFromToken = async (req) => {
       return null;
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "your-secret-key");
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET || "your-secret-key"
+    );
     if (!decoded || !decoded.userId) {
       return null;
     }
@@ -632,13 +635,7 @@ exports.createRoute = async (req, res) => {
     const loggedInUserRole = loggedInUser.role;
 
     // Validate required fields (createdBy is optional - we'll set it from JWT)
-    if (
-      !domain ||
-      !route ||
-      !template ||
-      !organization ||
-      !platform
-    ) {
+    if (!domain || !route || !template || !organization || !platform) {
       return res.status(400).json({
         error:
           "Missing required fields. Required: domain, route, template, organization, platform",
@@ -1297,7 +1294,9 @@ exports.deleteDomain = async (req, res) => {
         );
         console.log(`✅ Cloudflare DNS records deleted for ${domain}`);
       } else {
-        console.log(`ℹ️  No Cloudflare zone ID found for ${domain}, skipping DNS cleanup`);
+        console.log(
+          `ℹ️  No Cloudflare zone ID found for ${domain}, skipping DNS cleanup`
+        );
       }
 
       // 2. Delete domain from RedTrack
@@ -1306,7 +1305,9 @@ exports.deleteDomain = async (req, res) => {
         await redtrackService.deleteRedTrackDomain(domainDoc.redtrackDomainId);
         console.log(`✅ RedTrack domain deleted for ${domain}`);
       } else {
-        console.log(`ℹ️  No RedTrack domain ID found for ${domain}, skipping RedTrack cleanup`);
+        console.log(
+          `ℹ️  No RedTrack domain ID found for ${domain}, skipping RedTrack cleanup`
+        );
       }
     } catch (cleanupError) {
       console.error(
@@ -1334,7 +1335,9 @@ exports.deleteDomain = async (req, res) => {
         execSync(`sudo rm -f ${configPath}`, { stdio: "inherit" });
         console.log(`✅ Deleted Nginx config: ${configPath}`);
       } else {
-        console.log(`ℹ️  Nginx config file not found: ${configPath} (may have been already deleted)`);
+        console.log(
+          `ℹ️  Nginx config file not found: ${configPath} (may have been already deleted)`
+        );
       }
     } catch (nginxCleanupError) {
       console.warn(
@@ -1356,7 +1359,9 @@ exports.deleteDomain = async (req, res) => {
       console.error(`❌ Nginx reload failed: ${nginxError.message}`);
       if (nginxError.stdout) console.error(`stdout: ${nginxError.stdout}`);
       if (nginxError.stderr) console.error(`stderr: ${nginxError.stderr}`);
-      console.warn(`⚠️  Domain deleted but nginx reload failed - manual reload may be needed`);
+      console.warn(
+        `⚠️  Domain deleted but nginx reload failed - manual reload may be needed`
+      );
       // Continue - domain is already deleted from DB
     }
 
@@ -1382,9 +1387,9 @@ exports.deleteDomain = async (req, res) => {
     console.error("Error message:", err.message);
     console.error("Error stack:", err.stack);
     console.error("=".repeat(80));
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Server error while deleting domain.",
-      details: err.message 
+      details: err.message,
     });
   }
 };
