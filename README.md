@@ -7,6 +7,7 @@ cb-ss - sudo /usr/local/bin/deploy-cb-ss.sh
 el-cb-groc - sudo /usr/local/bin/deploy-el-cb-groc.sh
 el-cb-ss - sudo /usr/local/bin/deploy-el-cb-ss.sh
 es-cb-groc - sudo /usr/local/bin/deploy-es-cb-groc.sh
+es-cb-ss - sudo /usr/local/bin/deploy-es-cb-ss.sh
 backend code - cd /var/www/paragon-be && git pull && npm install && pm2 restart all
 backend code - cd /var/www/paragon-be && git pull origin main && pm2 restart all
 GENERAIC PAGES - cd /var/www/generic-pages
