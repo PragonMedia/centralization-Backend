@@ -23,8 +23,9 @@ function buildDomainFragment(record) {
     # ===============================
 
     # Redirect /${route} to /${route}/ (with trailing slash)
+    # Preserve query string parameters for tracking
     location = /${route} {
-        return 301 /${route}/;
+        return 301 /${route}/$is_args$args;
     }
 
     # Route location - handles both static files and PHP
@@ -71,8 +72,9 @@ function buildDomainFragment(record) {
     }
     
     # G2 page (HTML) - redirect without trailing slash
+    # Preserve query string parameters for tracking
     location = /xx-g2 {
-        return 301 /xx-g2/;
+        return 301 /xx-g2/$is_args$args;
     }
     # G2 page and static assets - prefix match handles both index.html and static files
     location ^~ /xx-g2/ {
