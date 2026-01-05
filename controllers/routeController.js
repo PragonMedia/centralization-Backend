@@ -13,6 +13,7 @@ const templateService = require("../services/templateService");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 const axios = require("axios");
 const cacheService = require("../services/cacheService");
+const phpFpmMonitor = require("../services/phpFpmMonitor");
 
 // Helper function to extract user from JWT token
 const getUserFromToken = async (req) => {
@@ -1823,6 +1824,50 @@ exports.purgeDomainCache = async (req, res) => {
     console.error("Error purging domain cache:", err);
     res.status(500).json({
       error: "Server error while purging domain cache.",
+      message: err.message,
+    });
+  }
+};
+
+// GET PHP-FPM WORKER STATUS
+exports.getPhpFpmStatus = async (req, res) => {
+  try {
+    // Extract logged-in user from JWT token
+    const loggedInUser = await getUserFromToken(req);
+    if (!loggedInUser) {
+      return res.status(401).json({
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const loggedInUserRole = loggedInUser.role;
+
+    // Only admin, tech, and ceo can view PHP-FPM status
+    if (!["admin", "tech", "ceo"].includes(loggedInUserRole)) {
+      return res.status(403).json({
+        error: "You don't have permission to view PHP-FPM status.",
+      });
+    }
+
+    // Get PHP-FPM statistics
+    const stats = await phpFpmMonitor.getPhpFpmStats();
+
+    // Optionally send Slack notification if usage is high
+    const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
+    if (slackWebhookUrl && (stats.status === "critical" || stats.status === "warning")) {
+      // Only send notification for warning/critical (avoid spam)
+      await phpFpmMonitor.sendSlackNotification(stats, slackWebhookUrl);
+    }
+
+    res.status(200).json({
+      success: true,
+      stats,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Error getting PHP-FPM status:", err);
+    res.status(500).json({
+      error: "Server error while retrieving PHP-FPM status.",
       message: err.message,
     });
   }

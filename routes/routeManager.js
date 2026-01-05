@@ -29,4 +29,7 @@ router.get("/creator-stats", routeController.getCreatorStats);
 router.post("/purge-cache/all", routeController.purgeAllCache);
 router.post("/purge-cache/domain/:domain", routeController.purgeDomainCache);
 
+// PHP-FPM monitoring
+router.get("/php-fpm/status", routeController.getPhpFpmStatus);
+
 module.exports = router;
