@@ -25,4 +25,8 @@ router.get("/stats", routeController.getDomainStats);
 router.get("/by-creator", routeController.getRoutesByCreator);
 router.get("/creator-stats", routeController.getCreatorStats);
 
+// Cache purging operations
+router.post("/purge-cache/all", routeController.purgeAllCache);
+router.post("/purge-cache/domain/:domain", routeController.purgeDomainCache);
+
 module.exports = router;

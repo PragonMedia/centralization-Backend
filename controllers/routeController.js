@@ -12,6 +12,7 @@ const {
 const templateService = require("../services/templateService");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 const axios = require("axios");
+const cacheService = require("../services/cacheService");
 
 // Helper function to extract user from JWT token
 const getUserFromToken = async (req) => {
@@ -1720,5 +1721,109 @@ exports.getCreatorStats = async (req, res) => {
     res
       .status(500)
       .json({ error: "Server error while retrieving creator statistics." });
+  }
+};
+
+// PURGE CLOUDFLARE CACHE FOR ALL DOMAINS
+exports.purgeAllCache = async (req, res) => {
+  try {
+    // Extract logged-in user from JWT token
+    const loggedInUser = await getUserFromToken(req);
+    if (!loggedInUser) {
+      return res.status(401).json({
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const loggedInUserRole = loggedInUser.role;
+
+    // Only admin, tech, and ceo can purge cache
+    if (!["admin", "tech", "ceo"].includes(loggedInUserRole)) {
+      return res.status(403).json({
+        error: "You don't have permission to purge cache. Only admin, tech, and ceo can perform this action.",
+      });
+    }
+
+    // Purge cache for all domains
+    const result = await cacheService.purgeAllDomainsCache();
+
+    res.status(200).json({
+      success: true,
+      message: result.message,
+      summary: {
+        total: result.total,
+        successCount: result.successCount,
+        failCount: result.failCount,
+      },
+      failedDomains: result.failedDomains,
+    });
+  } catch (err) {
+    console.error("Error purging cache:", err);
+    res.status(500).json({
+      error: "Server error while purging cache.",
+      message: err.message,
+    });
+  }
+};
+
+// PURGE CLOUDFLARE CACHE FOR A SPECIFIC DOMAIN
+exports.purgeDomainCache = async (req, res) => {
+  try {
+    // Extract logged-in user from JWT token
+    const loggedInUser = await getUserFromToken(req);
+    if (!loggedInUser) {
+      return res.status(401).json({
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const loggedInUserRole = loggedInUser.role;
+    const loggedInUserEmail = loggedInUser.email;
+
+    const { domain } = req.params;
+
+    if (!domain) {
+      return res.status(400).json({
+        error: "Domain parameter is required.",
+      });
+    }
+
+    // Check if domain exists
+    const domainDoc = await Domain.findOne({ domain });
+    if (!domainDoc) {
+      return res.status(404).json({
+        error: "Domain not found.",
+      });
+    }
+
+    // Role-based access control
+    if (loggedInUserRole === "mediaBuyer") {
+      // MediaBuyer can only purge cache for domains assigned to them
+      if (domainDoc.assignedTo !== loggedInUserEmail) {
+        return res.status(403).json({
+          error: "You don't have access to purge cache for this domain.",
+        });
+      }
+    } else if (!["tech", "ceo", "admin"].includes(loggedInUserRole)) {
+      // Only tech, ceo, and admin can purge cache for any domain
+      return res.status(403).json({
+        error: "You don't have permission to purge cache.",
+      });
+    }
+
+    // Purge cache for the domain
+    const result = await cacheService.purgeDomainCache(domain);
+
+    res.status(200).json({
+      success: true,
+      message: result.message,
+      domain: domain,
+    });
+  } catch (err) {
+    console.error("Error purging domain cache:", err);
+    res.status(500).json({
+      error: "Server error while purging domain cache.",
+      message: err.message,
+    });
   }
 };
