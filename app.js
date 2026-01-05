@@ -60,12 +60,16 @@ const limiter = rateLimit({
   },
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  // Skip rate limiting for domain-route-details (it has its own higher limit)
+  skip: (req) => {
+    return req.path === "/api/v1/domain-route-details";
+  },
 });
 
 // Apply more lenient rate limiting to public API endpoints (landing pages)
 app.use("/api/v1/domain-route-details", publicApiLimiter);
 
-// Apply standard rate limiting to all other routes
+// Apply standard rate limiting to all other routes (skips domain-route-details)
 app.use(limiter);
 
 // Stricter rate limiting for auth routes
