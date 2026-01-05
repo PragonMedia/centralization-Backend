@@ -32,6 +32,26 @@ app.use(
 );
 
 // 2. Rate limiting
+// More lenient rate limiter for public API endpoints (landing pages)
+const publicApiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100000, // Very high limit for public API endpoints (landing pages call this on every page load)
+  message: {
+    error: "Too many requests from this IP, please try again later.",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Use Cloudflare's real IP if available, otherwise fall back to req.ip
+  keyGenerator: (req) => {
+    return (
+      req.headers["cf-connecting-ip"] ||
+      req.headers["x-forwarded-for"] ||
+      req.ip
+    );
+  },
+});
+
+// Standard rate limiter for other routes
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // Limit each IP to 100 requests per windowMs
@@ -42,7 +62,10 @@ const limiter = rateLimit({
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
 });
 
-// Apply rate limiting to all routes
+// Apply more lenient rate limiting to public API endpoints (landing pages)
+app.use("/api/v1/domain-route-details", publicApiLimiter);
+
+// Apply standard rate limiting to all other routes
 app.use(limiter);
 
 // Stricter rate limiting for auth routes

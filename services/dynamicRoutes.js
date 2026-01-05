@@ -144,9 +144,10 @@ server {
 
     # GENERAL PHP fallback (catches PHP files not matched by route-specific blocks)
     location ~ \\.php$ {
-        include snippets/fastcgi-php.conf;
+        include fastcgi.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME /var/www/${domain}$uri;
+        fastcgi_param REQUEST_URI $request_uri;
     }
 
     # MAIN ROOT (only matches if no route matched above)
@@ -208,9 +209,10 @@ server {
 
     # GENERAL PHP fallback (catches PHP files not matched by route-specific blocks)
     location ~ \\.php$ {
-        include snippets/fastcgi-php.conf;
+        include fastcgi.conf;
         fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME /var/www/${domain}$uri;
+        fastcgi_param REQUEST_URI $request_uri;
     }
 
     # MAIN ROOT (only matches if no route matched above)
