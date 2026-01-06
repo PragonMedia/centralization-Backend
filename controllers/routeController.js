@@ -778,14 +778,31 @@ exports.createRoute = async (req, res) => {
       `🔄 Regenerating nginx config for ${domainDoc.domain} with new route: ${route}`
     );
     try {
-      const nginxResult = await generateNginxConfig(domainDoc);
-      if (nginxResult && nginxResult.success) {
-        console.log(
-          `✅ Nginx config regenerated successfully for ${domainDoc.domain}`
-        );
+      await generateNginxConfig(domainDoc);
+      
+      // Verify the config file was actually created and contains the route
+      const fs = require("fs");
+      const configPath = `/etc/nginx/dynamic/${domainDoc.domain}.conf`;
+      if (fs.existsSync(configPath)) {
+        const configContent = fs.readFileSync(configPath, "utf8");
+        if (configContent.includes(`location`) && configContent.includes(`/${route}`)) {
+          console.log(
+            `✅ Nginx config regenerated and verified for ${domainDoc.domain} (route /${route} found in config)`
+          );
+        } else {
+          console.error(
+            `❌ WARNING: Nginx config file exists but route /${route} is NOT in the config!`
+          );
+          console.error(
+            `⚠️  Route created but Nginx config is missing the route - manual regeneration required`
+          );
+        }
       } else {
-        console.warn(
-          `⚠️  Nginx config regeneration completed with warnings for ${domainDoc.domain}`
+        console.error(
+          `❌ WARNING: Nginx config file was NOT created: ${configPath}`
+        );
+        console.error(
+          `⚠️  Route created but Nginx config file is missing - manual regeneration required`
         );
       }
     } catch (nginxErr) {
@@ -793,9 +810,9 @@ exports.createRoute = async (req, res) => {
         `❌ Failed to regenerate nginx config: ${nginxErr.message}`
       );
       console.error(`❌ Nginx error stack: ${nginxErr.stack}`);
-      // Don't fail the route creation if nginx config fails - log warning but continue
+      // Don't fail the route creation if nginx config fails - log error but continue
       console.warn(
-        `⚠️  Route created but nginx config needs manual regeneration`
+        `⚠️  Route created but nginx config generation failed - manual regeneration required`
       );
     }
 
