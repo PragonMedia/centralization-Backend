@@ -42,12 +42,15 @@ const publicApiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   // Use Cloudflare's real IP if available, otherwise fall back to req.ip
+  // Handle IPv6 addresses properly to avoid ERR_ERL_KEY_GEN_IPV6
   keyGenerator: (req) => {
-    return (
+    const ip =
       req.headers["cf-connecting-ip"] ||
-      req.headers["x-forwarded-for"] ||
-      req.ip
-    );
+      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+      req.ip ||
+      req.connection?.remoteAddress;
+    // Normalize IPv6 addresses and handle both IPv4 and IPv6
+    return ip ? ip.replace(/^::ffff:/, "") : "unknown";
   },
 });
 
