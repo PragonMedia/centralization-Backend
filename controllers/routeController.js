@@ -392,8 +392,27 @@ exports.createDomain = async (req, res) => {
       console.log(
         `🔄 STEP 4.5 — Writing nginx fragment for ${sanitizedDomain}`
       );
-      await generateNginxConfig(tempDomain);
-      console.log(`✅ nginx fragment ready`);
+      try {
+        await generateNginxConfig(tempDomain);
+        
+        // Verify the config file was actually created
+        const fs = require("fs");
+        const configPath = `/etc/nginx/dynamic/${sanitizedDomain}.conf`;
+        if (fs.existsSync(configPath)) {
+          console.log(`✅ Nginx config file verified: ${configPath}`);
+        } else {
+          console.error(`❌ WARNING: Nginx config file was NOT created: ${configPath}`);
+          console.error(`⚠️  Domain created but Nginx config is missing - manual regeneration required`);
+        }
+        console.log(`✅ nginx fragment ready`);
+      } catch (nginxErr) {
+        console.error(`❌ Failed to generate nginx config: ${nginxErr.message}`);
+        console.error(`❌ Nginx error stack: ${nginxErr.stack}`);
+        // Don't fail domain creation if nginx config fails - log error but continue
+        console.warn(
+          `⚠️  Domain created but nginx config generation failed - manual regeneration required`
+        );
+      }
 
       // 6) Set Cloudflare SSL mode (Universal SSL handles edge)
       console.log(
