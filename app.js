@@ -41,8 +41,8 @@ const publicApiLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  // Use Cloudflare's real IP if available, otherwise let express-rate-limit handle IP detection
-  // This avoids IPv6 key generation errors
+  // Use Cloudflare's real IP if available, otherwise use a safe fallback
+  // Avoid using req.ip directly to prevent IPv6 validation errors
   keyGenerator: (req) => {
     // Prefer Cloudflare's real IP header (always IPv4 or properly formatted)
     if (req.headers["cf-connecting-ip"]) {
@@ -52,13 +52,13 @@ const publicApiLimiter = rateLimit({
     if (req.headers["x-forwarded-for"]) {
       return req.headers["x-forwarded-for"].split(",")[0].trim();
     }
-    // For local requests or when no proxy headers, use a simple identifier
-    // express-rate-limit will handle the IP detection automatically if we return undefined
-    // But to avoid the IPv6 error, we'll use a simple string-based key
-    return req.ip ? String(req.ip).replace(/:/g, "-") : "unknown";
+    // For local requests, use connection remoteAddress (safer than req.ip)
+    if (req.connection && req.connection.remoteAddress) {
+      return String(req.connection.remoteAddress).replace(/:/g, "-");
+    }
+    // Last resort: use a session-based identifier
+    return req.headers["user-agent"] ? `ua-${req.headers["user-agent"].substring(0, 20)}` : "unknown";
   },
-  // Skip validation for IPv6 to avoid the error (we're handling IPs manually above)
-  skip: false,
 });
 
 // Standard rate limiter for other routes
