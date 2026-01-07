@@ -3,6 +3,7 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = require("express-rate-limit");
 const hpp = require("hpp");
 const mongoSanitize = require("express-mongo-sanitize");
 const xss = require("xss-clean");
@@ -41,8 +42,7 @@ const publicApiLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  // Use Cloudflare's real IP if available, otherwise use a safe fallback
-  // Avoid using req.ip directly to prevent IPv6 validation errors
+  // Use Cloudflare's real IP if available, otherwise use ipKeyGenerator helper for IPv6 safety
   keyGenerator: (req) => {
     // Prefer Cloudflare's real IP header (always IPv4 or properly formatted)
     if (req.headers["cf-connecting-ip"]) {
@@ -52,12 +52,8 @@ const publicApiLimiter = rateLimit({
     if (req.headers["x-forwarded-for"]) {
       return req.headers["x-forwarded-for"].split(",")[0].trim();
     }
-    // For local requests, use connection remoteAddress (safer than req.ip)
-    if (req.connection && req.connection.remoteAddress) {
-      return String(req.connection.remoteAddress).replace(/:/g, "-");
-    }
-    // Last resort: use a session-based identifier
-    return req.headers["user-agent"] ? `ua-${req.headers["user-agent"].substring(0, 20)}` : "unknown";
+    // Use ipKeyGenerator helper for safe IP detection (handles IPv6 properly)
+    return ipKeyGenerator(req);
   },
 });
 
