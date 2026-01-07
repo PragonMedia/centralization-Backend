@@ -753,6 +753,13 @@ exports.createRoute = async (req, res) => {
 
     await domainDoc.save();
 
+    // Refresh domainDoc from database to ensure we have the latest data with the new route
+    const refreshedDomainDoc = await Domain.findOne({ domain });
+    if (!refreshedDomainDoc) {
+      console.error(`❌ ERROR: Could not find domain ${domain} after saving route`);
+      return res.status(500).json({ error: "Failed to refresh domain after route creation" });
+    }
+
     // Validate template exists (nginx will serve directly from /var/www/templates/{template}/)
     // Templates are single source of truth - no copying needed, one template serves all routes
     console.log(`🔍 Validating template "${template}" exists...`);
@@ -775,19 +782,32 @@ exports.createRoute = async (req, res) => {
 
     // Regenerate nginx config with new route (uses alias to point to template directory)
     console.log(
-      `🔄 Regenerating nginx config for ${domainDoc.domain} with new route: ${route}`
+      `🔄 Regenerating nginx config for ${refreshedDomainDoc.domain} with new route: ${route}`
     );
+    console.log(`📋 Domain has ${refreshedDomainDoc.routes?.length || 0} routes total`);
+    
     try {
-      await generateNginxConfig(domainDoc);
+      const nginxResult = await generateNginxConfig(refreshedDomainDoc);
+      
+      // Check if generateNginxConfig returned an error
+      if (nginxResult && nginxResult.warning) {
+        console.error(`❌ Nginx config generation returned warning: ${nginxResult.warning}`);
+      }
       
       // Verify the config file was actually created and contains the route
       const fs = require("fs");
-      const configPath = `/etc/nginx/dynamic/${domainDoc.domain}.conf`;
+      const configPath = `/etc/nginx/dynamic/${refreshedDomainDoc.domain}.conf`;
+      
+      // Wait a moment for file system to sync
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       if (fs.existsSync(configPath)) {
         const configContent = fs.readFileSync(configPath, "utf8");
-        if (configContent.includes(`location`) && configContent.includes(`/${route}`)) {
+        const routePattern = new RegExp(`location.*/${route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+        
+        if (configContent.includes(`location`) && routePattern.test(configContent)) {
           console.log(
-            `✅ Nginx config regenerated and verified for ${domainDoc.domain} (route /${route} found in config)`
+            `✅ Nginx config regenerated and verified for ${refreshedDomainDoc.domain} (route /${route} found in config)`
           );
         } else {
           console.error(
@@ -796,6 +816,8 @@ exports.createRoute = async (req, res) => {
           console.error(
             `⚠️  Route created but Nginx config is missing the route - manual regeneration required`
           );
+          console.error(`📝 Config file size: ${configContent.length} bytes`);
+          console.error(`📝 Looking for route pattern: /${route}`);
         }
       } else {
         console.error(
