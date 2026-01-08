@@ -1217,7 +1217,11 @@ exports.getRouteData = async (req, res) => {
   }
 };
 
-// GET DOMAIN ROUTE DETAILS (Optimized - uses query parameters)
+// In-memory cache for domain route details (reduces MongoDB queries)
+const routeDetailsCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache TTL
+
+// GET DOMAIN ROUTE DETAILS (Optimized - uses query parameters + caching)
 // Endpoint: GET /api/v1/domain-route-details?domain=xxx&route=yyy
 exports.getDomainRouteDetails = async (req, res) => {
   const { domain, route } = req.query;
@@ -1233,6 +1237,13 @@ exports.getDomainRouteDetails = async (req, res) => {
     // Sanitize inputs
     const sanitizedDomain = domain.trim();
     const sanitizedRoute = route.trim();
+    const cacheKey = `${sanitizedDomain}:${sanitizedRoute}`;
+
+    // Check cache first
+    const cached = routeDetailsCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return res.status(200).json(cached.data);
+    }
 
     // Optimized query: Only fetch fields we need (still single query, very fast)
     const domainDoc = await Domain.findOne(
@@ -1268,7 +1279,7 @@ exports.getDomainRouteDetails = async (req, res) => {
     }
 
     // Build response with route data and domain context
-    res.status(200).json({
+    const responseData = {
       success: true,
       domain: sanitizedDomain,
       route: sanitizedRoute,
@@ -1290,7 +1301,25 @@ exports.getDomainRouteDetails = async (req, res) => {
         platform: domainDoc.platform,
         redtrackTrackingDomain: domainDoc.redtrackTrackingDomain || null,
       },
+    };
+
+    // Cache the response
+    routeDetailsCache.set(cacheKey, {
+      data: responseData,
+      timestamp: Date.now(),
     });
+
+    // Clean up old cache entries periodically (prevent memory leak)
+    if (routeDetailsCache.size > 10000) {
+      const now = Date.now();
+      for (const [key, value] of routeDetailsCache.entries()) {
+        if (now - value.timestamp > CACHE_TTL) {
+          routeDetailsCache.delete(key);
+        }
+      }
+    }
+
+    res.status(200).json(responseData);
   } catch (err) {
     console.error("Error fetching domain route details:", err);
     res
