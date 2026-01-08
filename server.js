@@ -11,6 +11,11 @@ mongoose
   .connect(MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
+    maxPoolSize: 150, // Increase connection pool (MongoDB Atlas free tier limit is 500)
+    minPoolSize: 10, // Maintain minimum connections
+    serverSelectionTimeoutMS: 5000, // Fail fast if MongoDB is unreachable
+    socketTimeoutMS: 45000, // Close connections after 45s of inactivity
+    connectTimeoutMS: 10000, // Connection timeout
   })
   .then(() => console.log("✅ Connected to MongoDB Atlas"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
