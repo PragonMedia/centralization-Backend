@@ -241,16 +241,12 @@ exports.createDomain = async (req, res) => {
       });
     }
 
-    // Validate platform
-    if (
-      !["Facebook", "Google", "Liftoff", "Bigo", "Media Math"].includes(
-        platform
-      )
-    ) {
+    // Validate platform (accept any non-empty string)
+    if (typeof platform !== "string" || platform.trim().length === 0) {
       console.error(`❌ Validation failed: Invalid platform: ${platform}`);
       return res.status(400).json({
         error: "Invalid platform",
-        details: "Must be one of: Facebook, Google, Liftoff, Bigo, Media Math",
+        details: "Platform must be a non-empty string",
         provided: platform,
       });
     }
@@ -394,19 +390,25 @@ exports.createDomain = async (req, res) => {
       );
       try {
         await generateNginxConfig(tempDomain);
-        
+
         // Verify the config file was actually created
         const fs = require("fs");
         const configPath = `/etc/nginx/dynamic/${sanitizedDomain}.conf`;
         if (fs.existsSync(configPath)) {
           console.log(`✅ Nginx config file verified: ${configPath}`);
         } else {
-          console.error(`❌ WARNING: Nginx config file was NOT created: ${configPath}`);
-          console.error(`⚠️  Domain created but Nginx config is missing - manual regeneration required`);
+          console.error(
+            `❌ WARNING: Nginx config file was NOT created: ${configPath}`
+          );
+          console.error(
+            `⚠️  Domain created but Nginx config is missing - manual regeneration required`
+          );
         }
         console.log(`✅ nginx fragment ready`);
       } catch (nginxErr) {
-        console.error(`❌ Failed to generate nginx config: ${nginxErr.message}`);
+        console.error(
+          `❌ Failed to generate nginx config: ${nginxErr.message}`
+        );
         console.error(`❌ Nginx error stack: ${nginxErr.stack}`);
         // Don't fail domain creation if nginx config fails - log error but continue
         console.warn(
@@ -674,15 +676,10 @@ exports.createRoute = async (req, res) => {
       });
     }
 
-    // Validate platform
-    if (
-      !["Facebook", "Google", "Liftoff", "Bigo", "Media Math"].includes(
-        platform
-      )
-    ) {
+    // Validate platform (accept any non-empty string)
+    if (typeof platform !== "string" || platform.trim().length === 0) {
       return res.status(400).json({
-        error:
-          "Invalid platform. Must be one of: Facebook, Google, Liftoff, Bigo, Media Math",
+        error: "Invalid platform. Platform must be a non-empty string",
       });
     }
 
@@ -756,8 +753,12 @@ exports.createRoute = async (req, res) => {
     // Refresh domainDoc from database to ensure we have the latest data with the new route
     const refreshedDomainDoc = await Domain.findOne({ domain });
     if (!refreshedDomainDoc) {
-      console.error(`❌ ERROR: Could not find domain ${domain} after saving route`);
-      return res.status(500).json({ error: "Failed to refresh domain after route creation" });
+      console.error(
+        `❌ ERROR: Could not find domain ${domain} after saving route`
+      );
+      return res
+        .status(500)
+        .json({ error: "Failed to refresh domain after route creation" });
     }
 
     // Validate template exists (nginx will serve directly from /var/www/templates/{template}/)
@@ -784,28 +785,37 @@ exports.createRoute = async (req, res) => {
     console.log(
       `🔄 Regenerating nginx config for ${refreshedDomainDoc.domain} with new route: ${route}`
     );
-    console.log(`📋 Domain has ${refreshedDomainDoc.routes?.length || 0} routes total`);
-    
+    console.log(
+      `📋 Domain has ${refreshedDomainDoc.routes?.length || 0} routes total`
+    );
+
     try {
       const nginxResult = await generateNginxConfig(refreshedDomainDoc);
-      
+
       // Check if generateNginxConfig returned an error
       if (nginxResult && nginxResult.warning) {
-        console.error(`❌ Nginx config generation returned warning: ${nginxResult.warning}`);
+        console.error(
+          `❌ Nginx config generation returned warning: ${nginxResult.warning}`
+        );
       }
-      
+
       // Verify the config file was actually created and contains the route
       const fs = require("fs");
       const configPath = `/etc/nginx/dynamic/${refreshedDomainDoc.domain}.conf`;
-      
+
       // Wait a moment for file system to sync
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
       if (fs.existsSync(configPath)) {
         const configContent = fs.readFileSync(configPath, "utf8");
-        const routePattern = new RegExp(`location.*/${route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
-        
-        if (configContent.includes(`location`) && routePattern.test(configContent)) {
+        const routePattern = new RegExp(
+          `location.*/${route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
+        );
+
+        if (
+          configContent.includes(`location`) &&
+          routePattern.test(configContent)
+        ) {
           console.log(
             `✅ Nginx config regenerated and verified for ${refreshedDomainDoc.domain} (route /${route} found in config)`
           );
@@ -920,16 +930,11 @@ exports.updateDomainName = async (req, res) => {
       domainDoc.id = newId;
     }
 
-    // Update platform if provided
+    // Update platform if provided (accept any non-empty string)
     if (newPlatform !== undefined) {
-      if (
-        !["Facebook", "Google", "Liftoff", "Bigo", "Media Math"].includes(
-          newPlatform
-        )
-      ) {
+      if (typeof newPlatform !== "string" || newPlatform.trim().length === 0) {
         return res.status(400).json({
-          error:
-            "Invalid platform. Must be one of: Facebook, Google, Liftoff, Bigo, Media Math",
+          error: "Invalid platform. Platform must be a non-empty string",
         });
       }
       newValues.platform = newPlatform;
@@ -1828,7 +1833,8 @@ exports.purgeAllCache = async (req, res) => {
     // Only admin, tech, and ceo can purge cache
     if (!["admin", "tech", "ceo"].includes(loggedInUserRole)) {
       return res.status(403).json({
-        error: "You don't have permission to purge cache. Only admin, tech, and ceo can perform this action.",
+        error:
+          "You don't have permission to purge cache. Only admin, tech, and ceo can perform this action.",
       });
     }
 
@@ -1941,7 +1947,10 @@ exports.getPhpFpmStatus = async (req, res) => {
 
     // Optionally send Slack notification if usage is high
     const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
-    if (slackWebhookUrl && (stats.status === "critical" || stats.status === "warning")) {
+    if (
+      slackWebhookUrl &&
+      (stats.status === "critical" || stats.status === "warning")
+    ) {
       // Only send notification for warning/critical (avoid spam)
       await phpFpmMonitor.sendSlackNotification(stats, slackWebhookUrl);
     }
