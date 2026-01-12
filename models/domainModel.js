@@ -16,7 +16,6 @@ const routeSchema = new mongoose.Schema({
   platform: {
     type: String,
     required: true,
-    enum: ["Facebook", "Google", "Liftoff", "Bigo", "Media Math", "DV 360"],
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
@@ -36,7 +35,6 @@ const domainSchema = new mongoose.Schema(
     platform: {
       type: String,
       required: true,
-      enum: ["Facebook", "Google", "Liftoff", "Bigo", "Media Math"],
     },
     rtkID: { type: String, required: false },
     certificationTags: [{ type: String }],
