@@ -941,15 +941,17 @@ exports.updateDomainName = async (req, res) => {
       domainDoc.platform = newPlatform;
     }
 
-    // Update rtkID if provided
+    // Update rtkID if provided (accept empty strings and convert to null)
     if (newRtkID !== undefined) {
-      if (typeof newRtkID !== "string" || newRtkID.trim().length === 0) {
+      if (typeof newRtkID !== "string") {
         return res.status(400).json({
-          error: "rtkID must be a non-empty string",
+          error: "rtkID must be a string",
         });
       }
-      newValues.rtkID = newRtkID;
-      domainDoc.rtkID = newRtkID;
+      // Convert empty string or whitespace-only to null
+      const trimmedRtkID = newRtkID.trim();
+      newValues.rtkID = trimmedRtkID.length > 0 ? trimmedRtkID : null;
+      domainDoc.rtkID = trimmedRtkID.length > 0 ? trimmedRtkID : null;
     }
 
     // Update certification tags if provided
