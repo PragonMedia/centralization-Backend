@@ -8,6 +8,11 @@ const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
  */
 async function sendSlackMessage(message) {
   try {
+    if (!SLACK_WEBHOOK_URL) {
+      console.warn("⚠️  SLACK_WEBHOOK_URL not set - skipping Slack notification");
+      return;
+    }
+
     await axios.post(SLACK_WEBHOOK_URL, {
       text: message,
     });
