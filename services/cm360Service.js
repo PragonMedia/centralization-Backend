@@ -66,18 +66,11 @@ function cleanConversion(conversion) {
     }
   }
 
-  // Convert match_id (snake_case from Ringba) to matchId (camelCase for CM360)
-  if (cleaned.match_id && !cleaned.matchId) {
-    cleaned.matchId = cleaned.match_id;
-    delete cleaned.match_id;
-  }
-
-  // List of mutually exclusive user identifier fields (in priority order)
-  // Higher priority fields are checked first
+  // List of mutually exclusive user identifier fields
   const userIdentifierFields = [
-    "matchId", // Highest priority
     "encryptedUserId",
     "encryptedUserIdCandidates",
+    "matchId",
     "mobileDeviceId",
     "gclid",
     "dclid",
@@ -85,35 +78,22 @@ function cleanConversion(conversion) {
   ];
 
   // Remove empty string user identifiers (CM360 treats empty string as a value)
-  // Only keep the one that has a non-empty value (prioritize matchId if present)
+  // Only keep the one that has a non-empty value
   let hasUserIdentifier = false;
-  let selectedField = null;
-
-  // First pass: find the first valid user identifier
   for (const field of userIdentifierFields) {
-    if (
-      cleaned[field] &&
-      typeof cleaned[field] === "string" &&
-      cleaned[field].trim() !== ""
-    ) {
-      if (!hasUserIdentifier) {
-        // First valid identifier found - keep it
+    if (cleaned[field] && typeof cleaned[field] === "string" && cleaned[field].trim() !== "") {
+      // Found a valid user identifier
+      if (hasUserIdentifier) {
+        // Already found one - remove this duplicate
+        delete cleaned[field];
+      } else {
+        // First valid identifier - keep it
         hasUserIdentifier = true;
-        selectedField = field;
       }
-    }
-  }
-
-  // Second pass: remove all other user identifier fields
-  for (const field of userIdentifierFields) {
-    if (field !== selectedField) {
+    } else {
+      // Empty or invalid - remove it
       delete cleaned[field];
     }
-  }
-
-  // Also remove the snake_case match_id if it wasn't converted
-  if (cleaned.match_id) {
-    delete cleaned.match_id;
   }
 
   return cleaned;
