@@ -13,6 +13,7 @@ const cloakingRouter = require("./routes/paragonCloaking");
 const routeRouter = require("./routes/routeManager"); // ✅ your central route controller
 const authRouter = require("./routes/authRoutes");
 const sslRouter = require("./routes/sslRoutes");
+const ringbaRouter = require("./routes/ringbaRoutes");
 
 const app = express();
 
@@ -66,16 +67,19 @@ const limiter = rateLimit({
   },
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-  // Skip rate limiting for domain-route-details (it has its own higher limit)
+  // Skip rate limiting for domain-route-details and ringba webhooks
   skip: (req) => {
-    return req.path === "/api/v1/domain-route-details";
+    return (
+      req.path === "/api/v1/domain-route-details" ||
+      req.path.startsWith("/ringba")
+    );
   },
 });
 
 // Apply more lenient rate limiting to public API endpoints (landing pages)
 app.use("/api/v1/domain-route-details", publicApiLimiter);
 
-// Apply standard rate limiting to all other routes (skips domain-route-details)
+// Apply standard rate limiting to all other routes (skips domain-route-details and /ringba)
 app.use(limiter);
 
 // Stricter rate limiting for auth routes
@@ -171,6 +175,10 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Ringba webhook routes - NO RATE LIMITING (must capture all requests: 150-200 req/sec)
+// Registered AFTER body parsing middleware so req.body is available
+app.use("/ringba", ringbaRouter);
 
 // Apply stricter rate limiting to auth routes
 app.use("/api/v1/auth", authLimiter, authRouter);

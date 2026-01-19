@@ -7,6 +7,9 @@ package-lock.json
 .env.local
 .env.*.local
 
+# Google service account credentials
+credentials.json
+
 # IDE and editor files
 .cursor/
 .vscode/
