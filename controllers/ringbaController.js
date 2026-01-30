@@ -72,16 +72,12 @@ function validateRingbaPayload(body) {
       errors.push("timestampMicros is required and must be a non-empty string");
     } else {
       // Validate timestampMicros is numeric (microseconds)
-      // Accepts numeric string - can be generated from Date.now() * 1000 (converts ms to microseconds)
+      // Allow negative/zero; cm360Service will normalize to current time if invalid
       const timestampStr = conversion.timestampMicros.trim();
       const timestampNum = Number(timestampStr);
-      if (
-        isNaN(timestampNum) ||
-        !/^\d+$/.test(timestampStr) ||
-        timestampNum <= 0
-      ) {
+      if (isNaN(timestampNum)) {
         errors.push(
-          "timestampMicros must be a positive numeric string in microseconds"
+          "timestampMicros must be a numeric string (microseconds)"
         );
       }
     }

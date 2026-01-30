@@ -55,14 +55,18 @@ async function getAuthClient() {
 function cleanConversion(conversion) {
   const cleaned = { ...conversion };
 
-  // Convert timestampMicros from seconds to microseconds
-  // Ringba sends timestamps in epoch seconds (e.g., 1768848703)
-  // CM360 requires microseconds (e.g., 1768848703000000)
+  // Normalize timestampMicros for CM360 (must be positive microseconds)
+  // Ringba may send seconds, negative, or "000000" - normalize to valid value
   if (cleaned.timestampMicros && typeof cleaned.timestampMicros === "string") {
-    const timestampSeconds = parseInt(cleaned.timestampMicros.trim(), 10);
-    if (!isNaN(timestampSeconds)) {
-      // Convert seconds to microseconds by multiplying by 1,000,000 (or adding 6 zeros)
-      cleaned.timestampMicros = String(timestampSeconds * 1000000);
+    const raw = cleaned.timestampMicros.trim();
+    const num = parseInt(raw, 10);
+    if (!isNaN(num) && num > 0) {
+      // Already positive: if small (seconds), convert to microseconds; else assume microseconds
+      cleaned.timestampMicros =
+        num < 1e12 ? String(num * 1000000) : String(num);
+    } else {
+      // Negative, zero, or invalid: use current time in microseconds
+      cleaned.timestampMicros = String(Math.floor(Date.now() * 1000));
     }
   }
 
@@ -81,7 +85,11 @@ function cleanConversion(conversion) {
   // Only keep the one that has a non-empty value
   let hasUserIdentifier = false;
   for (const field of userIdentifierFields) {
-    if (cleaned[field] && typeof cleaned[field] === "string" && cleaned[field].trim() !== "") {
+    if (
+      cleaned[field] &&
+      typeof cleaned[field] === "string" &&
+      cleaned[field].trim() !== ""
+    ) {
       // Found a valid user identifier
       if (hasUserIdentifier) {
         // Already found one - remove this duplicate
