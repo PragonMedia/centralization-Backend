@@ -115,7 +115,7 @@ function validateRingbaPayload(body) {
  */
 async function handleRingbaConversion(req, res) {
   try {
-    // Debug: Log request details
+    // Debug: Log request details and full body (so we can see what Ringba sent / what we validate)
     console.log("📥 Ringba webhook received:", {
       timestamp: new Date().toISOString(),
       method: req.method,
@@ -124,6 +124,9 @@ async function handleRingbaConversion(req, res) {
       bodyType: typeof req.body,
       conversionsCount: req.body?.conversions?.length || 0,
     });
+    if (req.body && req.body.conversions) {
+      console.log("📥 Ringba body (conversions):", JSON.stringify(req.body.conversions, null, 2));
+    }
 
     // Check if body exists
     if (!req.body) {
@@ -144,6 +147,9 @@ async function handleRingbaConversion(req, res) {
         error: validation.error,
       });
     }
+
+    // Log what we're sending to CM360
+    console.log("📤 Sending to CM360:", JSON.stringify(req.body.conversions, null, 2));
 
     // Send conversions to CM360
     const cm360Response = await cm360Service.sendConversionsToCM360(
