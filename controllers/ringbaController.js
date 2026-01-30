@@ -112,6 +112,11 @@ function validateRingbaPayload(body) {
 /**
  * Handle Ringba webhook conversion request
  * POST /ringba/conversion
+ *
+ * Optional env fallbacks when Ringba doesn't send floodlight IDs:
+ *   CM360_FLOODLIGHT_CONFIGURATION_ID
+ *   CM360_FLOODLIGHT_ACTIVITY_ID
+ * Either dclid or mobileDeviceId must still be sent by Ringba (no server fallback).
  */
 async function handleRingbaConversion(req, res) {
   try {
@@ -136,6 +141,20 @@ async function handleRingbaConversion(req, res) {
         error:
           "Request body is missing or could not be parsed. Ensure Content-Type is application/json",
       });
+    }
+
+    // Optional env fallbacks when Ringba doesn't send floodlight IDs (e.g. truncated postback)
+    const defaultFloodlightConfigId = (process.env.CM360_FLOODLIGHT_CONFIGURATION_ID || "").trim();
+    const defaultFloodlightActivityId = (process.env.CM360_FLOODLIGHT_ACTIVITY_ID || "").trim();
+    if (req.body.conversions && Array.isArray(req.body.conversions)) {
+      for (const c of req.body.conversions) {
+        if (!c.floodlightConfigurationId || String(c.floodlightConfigurationId).trim() === "") {
+          c.floodlightConfigurationId = defaultFloodlightConfigId;
+        }
+        if (!c.floodlightActivityId || String(c.floodlightActivityId).trim() === "") {
+          c.floodlightActivityId = defaultFloodlightActivityId;
+        }
+      }
     }
 
     // Validate payload
