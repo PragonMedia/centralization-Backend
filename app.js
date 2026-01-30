@@ -14,6 +14,7 @@ const routeRouter = require("./routes/routeManager"); // ✅ your central route 
 const authRouter = require("./routes/authRoutes");
 const sslRouter = require("./routes/sslRoutes");
 const ringbaRouter = require("./routes/ringbaRoutes");
+const { ringbaBodyParser } = require("./middleware/ringbaBodyParser");
 
 const app = express();
 
@@ -128,6 +129,14 @@ const authLimiter = rateLimit({
 // Allow all origins for development
 app.use(cors());
 
+// 3b. Ringba webhook: raw body + parse with malformed JSON repair (must be BEFORE global json parser)
+app.use(
+  "/ringba",
+  express.raw({ type: "application/json", limit: "10mb" }),
+  ringbaBodyParser,
+  ringbaRouter
+);
+
 // 4. Body parsing middleware
 app.use(express.json({ limit: "10mb" })); // Limit payload size
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -175,10 +184,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
-// Ringba webhook routes - NO RATE LIMITING (must capture all requests: 150-200 req/sec)
-// Registered AFTER body parsing middleware so req.body is available
-app.use("/ringba", ringbaRouter);
 
 // Apply stricter rate limiting to auth routes
 app.use("/api/v1/auth", authLimiter, authRouter);
