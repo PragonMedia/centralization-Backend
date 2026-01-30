@@ -82,19 +82,7 @@ function validateRingbaPayload(body) {
       }
     }
 
-    // At least one of dclid or mobileDeviceId must be present
-    const hasDclid =
-      conversion.dclid &&
-      typeof conversion.dclid === "string" &&
-      conversion.dclid.trim() !== "";
-    const hasMobileDeviceId =
-      conversion.mobileDeviceId &&
-      typeof conversion.mobileDeviceId === "string" &&
-      conversion.mobileDeviceId.trim() !== "";
-
-    if (!hasDclid && !hasMobileDeviceId) {
-      errors.push("Either 'dclid' or 'mobileDeviceId' must be provided");
-    }
+    // dclid or mobileDeviceId: optional here; CM360 may require one for attribution (we let API accept/reject)
 
     if (errors.length > 0) {
       return {
@@ -116,7 +104,7 @@ function validateRingbaPayload(body) {
  * Optional env fallbacks when Ringba doesn't send floodlight IDs:
  *   CM360_FLOODLIGHT_CONFIGURATION_ID
  *   CM360_FLOODLIGHT_ACTIVITY_ID
- * Either dclid or mobileDeviceId must still be sent by Ringba (no server fallback).
+ * dclid/mobileDeviceId are optional; CM360 may require one for attribution.
  */
 async function handleRingbaConversion(req, res) {
   try {
