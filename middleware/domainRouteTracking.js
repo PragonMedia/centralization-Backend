@@ -1,8 +1,8 @@
 /**
  * Domain+route tracking for debugging high-volume traffic.
- * Only runs when TRACK_DOMAIN_ROUTE=true (or "1"). Logs hits to a JSONL file.
- * Tracked: goldenplanstabloid.com/ss, goldenplanstabloid.com/groc
- * Delete the log file after testing. Turn off by unsetting TRACK_DOMAIN_ROUTE and restarting.
+ * TRACK_DOMAIN_ROUTE=true: log only goldenplanstabloid.com/ss, goldenplanstabloid.com/groc -> domain-route-hits.jsonl
+ * TRACK_DOMAIN_ROUTE_OTHER=true: log all other domain+route (exclude above) -> domain-route-hits-other.jsonl
+ * Delete log files after testing. Turn off by unsetting env and restarting.
  */
 
 const fs = require("fs");
@@ -16,6 +16,7 @@ const TRACKED = [
 
 const LOG_DIR = path.join(__dirname, "..", "logs");
 const LOG_FILE = path.join(LOG_DIR, "domain-route-hits.jsonl");
+const LOG_FILE_OTHER = path.join(LOG_DIR, "domain-route-hits-other.jsonl");
 
 function getClientIp(req) {
   if (req.headers["cf-connecting-ip"]) {
@@ -48,18 +49,7 @@ function shouldTrack(domain, route) {
   );
 }
 
-function domainRouteTrackingMiddleware(req, res, next) {
-  if (req.method !== "GET") return next();
-
-  const enabled =
-    process.env.TRACK_DOMAIN_ROUTE === "true" ||
-    process.env.TRACK_DOMAIN_ROUTE === "1";
-  if (!enabled) return next();
-
-  const domain = req.query.domain;
-  const route = req.query.route;
-  if (!shouldTrack(domain, route)) return next();
-
+function writeEntry(logPath, domain, route, req) {
   try {
     const uaString = req.headers["user-agent"] || "";
     const { deviceType, browser } = parseUserAgent(uaString);
@@ -72,13 +62,34 @@ function domainRouteTrackingMiddleware(req, res, next) {
       deviceType,
       browser,
     };
-
     if (!fs.existsSync(LOG_DIR)) {
       fs.mkdirSync(LOG_DIR, { recursive: true });
     }
-    fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+    fs.appendFileSync(logPath, JSON.stringify(entry) + "\n");
   } catch (err) {
     console.error("domainRouteTracking error:", err.message);
+  }
+}
+
+function domainRouteTrackingMiddleware(req, res, next) {
+  if (req.method !== "GET") return next();
+
+  const domain = req.query.domain;
+  const route = req.query.route;
+  const isTracked = shouldTrack(domain, route);
+
+  const enabledBigo =
+    process.env.TRACK_DOMAIN_ROUTE === "true" ||
+    process.env.TRACK_DOMAIN_ROUTE === "1";
+  if (enabledBigo && isTracked) {
+    writeEntry(LOG_FILE, domain, route, req);
+  }
+
+  const enabledOther =
+    process.env.TRACK_DOMAIN_ROUTE_OTHER === "true" ||
+    process.env.TRACK_DOMAIN_ROUTE_OTHER === "1";
+  if (enabledOther && !isTracked && domain && route) {
+    writeEntry(LOG_FILE_OTHER, domain, route, req);
   }
 
   next();
