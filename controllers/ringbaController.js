@@ -82,7 +82,14 @@ function validateRingbaPayload(body) {
       }
     }
 
-    // dclid or mobileDeviceId: optional here; CM360 may require one for attribution (we let API accept/reject)
+    // dclid required: if missing or empty we do not call CM360 and do not send Slack
+    if (
+      conversion.dclid == null ||
+      typeof conversion.dclid !== "string" ||
+      conversion.dclid.trim() === ""
+    ) {
+      errors.push("dclid is required and must be a non-empty string");
+    }
 
     if (errors.length > 0) {
       return {
@@ -100,11 +107,7 @@ function validateRingbaPayload(body) {
 /**
  * Handle Ringba webhook conversion request
  * POST /ringba/conversion
- *
- * Optional env fallbacks when Ringba doesn't send floodlight IDs:
- *   CM360_FLOODLIGHT_CONFIGURATION_ID
- *   CM360_FLOODLIGHT_ACTIVITY_ID
- * dclid/mobileDeviceId are optional; CM360 may require one for attribution.
+ * Ringba sends full body (floodlightConfigurationId, floodlightActivityId, dclid, ordinal, etc.). No hardcoding.
  */
 async function handleRingbaConversion(req, res) {
   try {
@@ -131,21 +134,7 @@ async function handleRingbaConversion(req, res) {
       });
     }
 
-    // Optional env fallbacks when Ringba doesn't send floodlight IDs (e.g. truncated postback)
-    const defaultFloodlightConfigId = (process.env.CM360_FLOODLIGHT_CONFIGURATION_ID || "").trim();
-    const defaultFloodlightActivityId = (process.env.CM360_FLOODLIGHT_ACTIVITY_ID || "").trim();
-    if (req.body.conversions && Array.isArray(req.body.conversions)) {
-      for (const c of req.body.conversions) {
-        if (!c.floodlightConfigurationId || String(c.floodlightConfigurationId).trim() === "") {
-          c.floodlightConfigurationId = defaultFloodlightConfigId;
-        }
-        if (!c.floodlightActivityId || String(c.floodlightActivityId).trim() === "") {
-          c.floodlightActivityId = defaultFloodlightActivityId;
-        }
-      }
-    }
-
-    // Validate payload
+    // Validate payload (Ringba sends full body: floodlight IDs, dclid, ordinal, etc. — no env fallbacks)
     const validation = validateRingbaPayload(req.body);
     if (!validation.isValid) {
       console.error("❌ Validation failed:", validation.error);

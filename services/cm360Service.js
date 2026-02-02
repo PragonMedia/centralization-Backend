@@ -8,6 +8,14 @@ const CM360_USER_PROFILE_ID = "10697326";
 const CM360_BASE_URL = "https://dfareporting.googleapis.com/dfareporting/v5";
 const CM360_BATCH_INSERT_URL = `${CM360_BASE_URL}/userprofiles/${CM360_USER_PROFILE_ID}/conversions/batchinsert`;
 
+/**
+ * Current time as epoch microseconds (string), same format as convert.js / CM360 batchinsert.
+ * Epoch ms * 1000 = epoch microseconds.
+ */
+function getCurrentTimestampMicros() {
+  return String(Math.floor(Date.now() * 1000));
+}
+
 // Initialize Google Auth (singleton pattern - reuse the same auth client)
 let authClient = null;
 
@@ -65,8 +73,8 @@ function cleanConversion(conversion) {
       cleaned.timestampMicros =
         num < 1e12 ? String(num * 1000000) : String(num);
     } else {
-      // Negative, zero, or invalid: use current time in microseconds
-      cleaned.timestampMicros = String(Math.floor(Date.now() * 1000));
+      // Negative, zero, or invalid: use current time in epoch microseconds
+      cleaned.timestampMicros = getCurrentTimestampMicros();
     }
   }
 
