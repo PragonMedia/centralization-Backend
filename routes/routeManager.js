@@ -2,13 +2,14 @@ const express = require("express");
 const router = express.Router();
 const routeController = require("../controllers/routeController");
 const { domainRouteTrackingMiddleware } = require("../middleware/domainRouteTracking");
+const { blockLocalhostMiddleware } = require("../middleware/blockLocalhost");
 
 // Basic CRUD operations - More specific routes first
 router.get("/", routeController.getAllDomains);
 router.get("/names", routeController.getDomainNames);
 router.post("/domain", routeController.createDomain);
 router.post("/data", routeController.getRouteData);
-router.get("/domain-route-details", domainRouteTrackingMiddleware, routeController.getDomainRouteDetails);
+router.get("/domain-route-details", blockLocalhostMiddleware, domainRouteTrackingMiddleware, routeController.getDomainRouteDetails);
 router.put("/updateDomain", routeController.updateDomainName);
 router.put("/updateData", routeController.updateRouteData);
 router.post("/route", routeController.createRoute);
