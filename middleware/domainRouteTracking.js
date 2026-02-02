@@ -1,8 +1,7 @@
 /**
- * Domain+route tracking for debugging high-volume traffic.
+ * Domain+route tracking for debugging high-volume traffic (BIGO only).
  * TRACK_DOMAIN_ROUTE=true: log only goldenplanstabloid.com/ss, goldenplanstabloid.com/groc -> domain-route-hits.jsonl
- * TRACK_DOMAIN_ROUTE_OTHER=true: log all other domain+route (exclude above) -> domain-route-hits-other.jsonl
- * Delete log files after testing. Turn off by unsetting env and restarting.
+ * Turn off by unsetting TRACK_DOMAIN_ROUTE and restarting.
  */
 
 const fs = require("fs");
@@ -16,7 +15,6 @@ const TRACKED = [
 
 const LOG_DIR = path.join(__dirname, "..", "logs");
 const LOG_FILE = path.join(LOG_DIR, "domain-route-hits.jsonl");
-const LOG_FILE_OTHER = path.join(LOG_DIR, "domain-route-hits-other.jsonl");
 
 function getClientIp(req) {
   if (req.headers["cf-connecting-ip"]) {
@@ -83,13 +81,6 @@ function domainRouteTrackingMiddleware(req, res, next) {
     process.env.TRACK_DOMAIN_ROUTE === "1";
   if (enabledBigo && isTracked) {
     writeEntry(LOG_FILE, domain, route, req);
-  }
-
-  const enabledOther =
-    process.env.TRACK_DOMAIN_ROUTE_OTHER === "true" ||
-    process.env.TRACK_DOMAIN_ROUTE_OTHER === "1";
-  if (enabledOther && !isTracked && domain && route) {
-    writeEntry(LOG_FILE_OTHER, domain, route, req);
   }
 
   next();
