@@ -14,9 +14,14 @@ const routeRouter = require("./routes/routeManager"); // ✅ your central route 
 const authRouter = require("./routes/authRoutes");
 const sslRouter = require("./routes/sslRoutes");
 const ringbaRouter = require("./routes/ringbaRoutes");
+const trackRouter = require("./routes/trackRoutes");
 const { ringbaBodyParser } = require("./middleware/ringbaBodyParser");
 
 const app = express();
+
+// Trust proxy so req.ip is the real client IP (from X-Forwarded-For / CF-Connecting-IP)
+// Required when behind nginx/Cloudflare so blockLocalhost and rate limiting see real IPs
+app.set("trust proxy", 1);
 
 // Security middleware - order matters!
 // 1. Helmet - Security headers
@@ -79,6 +84,7 @@ const limiter = rateLimit({
 
 // Apply more lenient rate limiting to public API endpoints (landing pages)
 app.use("/api/v1/domain-route-details", publicApiLimiter);
+app.use("/api/v1/track", publicApiLimiter);
 
 // Apply standard rate limiting to all other routes (skips domain-route-details and /ringba)
 app.use(limiter);
@@ -191,6 +197,7 @@ app.use("/api/v1/auth", authLimiter, authRouter);
 // Apply regular rate limiting to other routes
 app.use("/api/v1/validate", cloakingRouter);
 app.use("/api/v1/ssl", sslRouter);
+app.use("/api/v1/track", trackRouter);
 app.use("/api/v1", routeRouter); // ✅ example endpoint: POST /routes
 
 // 11. Global error handling middleware (must be last)
