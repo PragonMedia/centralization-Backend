@@ -41,13 +41,15 @@ function timestampMicrosToEpochSeconds(timestampMicros) {
 
 /**
  * Build one Roku event from Ringba conversion (no dclid path)
- * Expects: event_group_id, event_id (or ordinal), timestampMicros, and raw phone (phone / caller_phone / callerPhone)
+ * event_group_id from Ringba (conversion or defaultEventGroupId fallback).
+ * No event_id sent to Roku. Raw phone hashed as user_data.ph.
  */
-function buildRokuEvent(conversion) {
+function buildRokuEvent(conversion, options = {}) {
   const eventGroupId =
-    conversion.event_group_id ?? conversion.eventGroupId ?? "";
-  const eventId =
-    conversion.event_id ?? conversion.eventId ?? conversion.ordinal ?? "";
+    conversion.event_group_id ??
+    conversion.eventGroupId ??
+    options.defaultEventGroupId ??
+    "";
   const rawPhone =
     conversion.phone ??
     conversion.caller_phone ??
@@ -63,7 +65,6 @@ function buildRokuEvent(conversion) {
     event_group_id: eventGroupId,
     events: [
       {
-        event_id: eventId,
         event_name: "LEAD",
         event_source: "phone_call",
         event_time: eventTime,
@@ -78,34 +79,39 @@ function buildRokuEvent(conversion) {
 
 /**
  * Send one or more conversions to Roku CAPI (no-dclid conversions only)
- * Each conversion is sent as a separate POST (one event per request) per your mapping
+ * API key comes from Ringba per conversion (roku_api_key / rokuApiKey) - each ad account has its own key.
+ * event_group_id from Ringba (per conversion or body default).
  * @param {Array<Object>} conversions - Ringba conversion objects (without dclid)
+ * @param {{ defaultEventGroupId?: string }} options - optional body-level event_group_id from Ringba
  * @returns {Promise<Array<{ conversion, response?, error? }>>}
  */
-async function sendConversionsToRoku(conversions) {
-  const apiKey = ROKU_CONFIG.CAPI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      "ROKU_CAPI_API_KEY is not set. Set it in .env for Roku Conversions API."
-    );
-  }
-
+async function sendConversionsToRoku(conversions, options = {}) {
   const url = ROKU_CONFIG.CAPI_EVENTS_URL;
   const results = [];
 
   for (const conversion of conversions) {
+    const apiKey =
+      conversion.roku_api_key ?? conversion.rokuApiKey ?? "";
+    if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+      console.error("❌ Roku CAPI: missing roku_api_key on conversion (from Ringba)");
+      results.push({ conversion, error: "roku_api_key is required from Ringba" });
+      continue;
+    }
+
     try {
-      const payload = buildRokuEvent(conversion);
+      const payload = buildRokuEvent(conversion, {
+        defaultEventGroupId: options.defaultEventGroupId,
+      });
       const response = await axios.post(url, payload, {
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${apiKey.trim()}`,
         },
       });
       results.push({ conversion, response: response.data });
       console.log("✅ Roku CAPI success:", {
-        event_id: payload.events[0].event_id,
+        event_group_id: payload.event_group_id,
         code: response.data?.code,
       });
     } catch (error) {

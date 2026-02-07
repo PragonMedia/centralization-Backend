@@ -58,15 +58,16 @@ function validateRingbaPayload(body) {
       if (!c.ordinal || typeof c.ordinal !== "string" || c.ordinal.trim() === "")
         errors.push("ordinal is required for CM360");
     } else {
-      // Roku path
-      const eventGroupId = c.event_group_id ?? c.eventGroupId ?? "";
+      // Roku path: event_group_id and phone from Ringba; API key from Ringba (per conversion)
+      const eventGroupId =
+        c.event_group_id ?? c.eventGroupId ?? body.event_group_id ?? body.eventGroupId ?? "";
       if (typeof eventGroupId !== "string" || eventGroupId.trim() === "")
-        errors.push("event_group_id is required for Roku (no dclid)");
-      const eventId = c.event_id ?? c.eventId ?? c.ordinal ?? "";
-      if (typeof eventId !== "string" || eventId.trim() === "")
-        errors.push("event_id or ordinal is required for Roku");
+        errors.push("event_group_id is required for Roku (from Ringba, per conversion or body)");
       const phone = getRawPhone(c);
       if (!phone) errors.push("phone (or caller_phone/callerPhone) is required for Roku");
+      const rokuKey = c.roku_api_key ?? c.rokuApiKey ?? "";
+      if (typeof rokuKey !== "string" || !rokuKey.trim())
+        errors.push("roku_api_key is required for Roku (from Ringba, per ad account)");
     }
 
     if (errors.length > 0) {
@@ -137,7 +138,9 @@ async function handleRingbaConversion(req, res) {
 
     if (rokuConversions.length > 0) {
       console.log("📤 Sending to Roku CAPI:", rokuConversions.length, "conversion(s)");
-      rokuResults = await rokuConversionService.sendConversionsToRoku(rokuConversions);
+      rokuResults = await rokuConversionService.sendConversionsToRoku(rokuConversions, {
+        defaultEventGroupId: req.body.event_group_id ?? req.body.eventGroupId,
+      });
     }
 
     return res.status(200).json({
