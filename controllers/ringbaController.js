@@ -41,16 +41,14 @@ function validateRingbaPayload(body) {
     const c = body.conversions[i];
     const errors = [];
 
-    // timestampMicros required for both paths
-    if (!c.timestampMicros || typeof c.timestampMicros !== "string" || c.timestampMicros.trim() === "") {
-      errors.push("timestampMicros is required and must be a non-empty string");
-    } else {
-      const num = Number(c.timestampMicros.trim());
-      if (isNaN(num)) errors.push("timestampMicros must be a numeric string");
-    }
-
     if (hasDclid(c)) {
-      // CM360 path
+      // CM360 path: timestampMicros required
+      if (!c.timestampMicros || typeof c.timestampMicros !== "string" || c.timestampMicros.trim() === "") {
+        errors.push("timestampMicros is required and must be a non-empty string");
+      } else {
+        const num = Number(c.timestampMicros.trim());
+        if (isNaN(num)) errors.push("timestampMicros must be a numeric string");
+      }
       if (!c.floodlightConfigurationId || typeof c.floodlightConfigurationId !== "string" || c.floodlightConfigurationId.trim() === "")
         errors.push("floodlightConfigurationId is required for CM360");
       if (!c.floodlightActivityId || typeof c.floodlightActivityId !== "string" || c.floodlightActivityId.trim() === "")

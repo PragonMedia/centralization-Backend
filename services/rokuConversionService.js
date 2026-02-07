@@ -42,6 +42,7 @@ function timestampMicrosToEpochSeconds(timestampMicros) {
 /**
  * Build one Roku event from Ringba conversion (no dclid path)
  * event_group_id from Ringba (conversion or defaultEventGroupId fallback).
+ * event_time = server time (Date.now() → epoch seconds). No timestampMicros required from Ringba.
  * No event_id sent to Roku. Raw phone hashed as user_data.ph.
  */
 function buildRokuEvent(conversion, options = {}) {
@@ -59,7 +60,7 @@ function buildRokuEvent(conversion, options = {}) {
   const normalizedPhone = normalizePhone(rawPhone);
   const hashedPhone = normalizedPhone ? sha256Hash(normalizedPhone) : "";
 
-  const eventTime = timestampMicrosToEpochSeconds(conversion.timestampMicros);
+  const eventTime = Math.floor(Date.now() / 1000);
 
   return {
     event_group_id: eventGroupId,
