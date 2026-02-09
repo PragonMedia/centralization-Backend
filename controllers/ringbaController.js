@@ -24,7 +24,7 @@ function getRawPhone(conversion) {
  * Validate incoming Ringba conversion payload
  * Each conversion must be valid for either CM360 (has dclid) or Roku (no dclid).
  * CM360 path: floodlightConfigurationId, floodlightActivityId, ordinal, timestampMicros, dclid
- * Roku path: event_group_id, event_id or ordinal, timestampMicros, raw phone
+ * Roku path: event_group_id (per conversion or body), roku_api_key, phone. Every Roku conversion calls DataZapp and sends max data to Roku.
  */
 function validateRingbaPayload(body) {
   if (!body || typeof body !== "object") {

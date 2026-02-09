@@ -43,17 +43,6 @@ function normalizeEmail(raw) {
 }
 
 /**
- * Ringba event_id for Roku path: 1 = current behavior (phone only), 2 = fetch caller email from external API then send
- * Accepts number or string "1"/"2". Default 1.
- */
-function getRokuEventId(conversion) {
-  const v = conversion.event_id ?? conversion.eventId;
-  if (v === 1 || v === "1") return 1;
-  if (v === 2 || v === "2") return 2;
-  return 1;
-}
-
-/**
  * Get raw (unhashed) phone from conversion for external API lookup
  */
 function getRawPhoneForLookup(conversion) {
@@ -236,11 +225,7 @@ async function sendConversionsToRoku(conversions, options = {}) {
       continue;
     }
 
-    const eventId = getRokuEventId(conversion);
-    let callerData = null;
-    if (eventId === 2) {
-      callerData = await getCallerDataFromDataZapp(conversion);
-    }
+    let callerData = await getCallerDataFromDataZapp(conversion);
 
     try {
       const payload = buildRokuEvent(conversion, {
@@ -291,7 +276,6 @@ module.exports = {
   normalizePhone,
   normalizeEmail,
   normalizeName,
-  getRokuEventId,
   getCallerDataFromDataZapp,
   getCallerEmailFromExternalApi,
   timestampMicrosToEpochSeconds,
