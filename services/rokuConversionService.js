@@ -9,6 +9,9 @@ const axios = require("axios");
 const ROKU_CONFIG = require("../config/roku");
 const DATAZAPP_CONFIG = require("../config/datazapp");
 
+/** When event_group_id equals this value, we do NOT call DataZapp; send standard data (phone only) to Roku. */
+const EVENT_GROUP_ID_SKIP_DATAZAPP = "Paccfsif7EU7";
+
 /**
  * Normalize raw phone for Roku before hashing (per Roku docs)
  * Remove all special characters including '+' or '-', leading zeros, trim whitespace
@@ -225,7 +228,14 @@ async function sendConversionsToRoku(conversions, options = {}) {
       continue;
     }
 
-    let callerData = await getCallerDataFromDataZapp(conversion);
+    const eventGroupId =
+      (conversion.event_group_id ?? conversion.eventGroupId ?? options.defaultEventGroupId ?? "").trim();
+    const skipDataZapp = eventGroupId === EVENT_GROUP_ID_SKIP_DATAZAPP;
+
+    let callerData = null;
+    if (!skipDataZapp) {
+      callerData = await getCallerDataFromDataZapp(conversion);
+    }
 
     try {
       const payload = buildRokuEvent(conversion, {
