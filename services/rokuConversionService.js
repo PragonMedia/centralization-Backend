@@ -237,8 +237,9 @@ async function sendConversionsToRoku(conversions, options = {}) {
       callerData = await getCallerDataFromDataZapp(conversion);
     }
 
+    let payload;
     try {
-      const payload = buildRokuEvent(conversion, {
+      payload = buildRokuEvent(conversion, {
         defaultEventGroupId: options.defaultEventGroupId,
         ...(callerData && {
           callerEmail: callerData.email,
@@ -267,7 +268,11 @@ async function sendConversionsToRoku(conversions, options = {}) {
         ? JSON.stringify(error.response.data)
         : error.message;
       console.error("❌ Roku CAPI error:", errMsg);
-      results.push({ conversion, sentToRoku: payload, error: errMsg });
+      results.push({
+        conversion,
+        ...(payload !== undefined && { sentToRoku: payload }),
+        error: errMsg,
+      });
     }
   }
 
