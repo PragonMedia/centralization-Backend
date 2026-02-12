@@ -213,7 +213,7 @@ function buildRokuEvent(conversion, options = {}) {
  * event_group_id from Ringba (per conversion or body default).
  * @param {Array<Object>} conversions - Ringba conversion objects (without dclid)
  * @param {{ defaultEventGroupId?: string }} options - optional body-level event_group_id from Ringba
- * @returns {Promise<Array<{ conversion, response?, error? }>>}
+ * @returns {Promise<Array<{ conversion, sentToRoku, response?, error? }>>}
  */
 async function sendConversionsToRoku(conversions, options = {}) {
   const url = ROKU_CONFIG.CAPI_EVENTS_URL;
@@ -257,7 +257,7 @@ async function sendConversionsToRoku(conversions, options = {}) {
           Authorization: `Bearer ${apiKey.trim()}`,
         },
       });
-      results.push({ conversion, response: response.data });
+      results.push({ conversion, sentToRoku: payload, response: response.data });
       console.log("✅ Roku CAPI success:", {
         event_group_id: payload.event_group_id,
         code: response.data?.code,
@@ -267,7 +267,7 @@ async function sendConversionsToRoku(conversions, options = {}) {
         ? JSON.stringify(error.response.data)
         : error.message;
       console.error("❌ Roku CAPI error:", errMsg);
-      results.push({ conversion, error: errMsg });
+      results.push({ conversion, sentToRoku: payload, error: errMsg });
     }
   }
 
