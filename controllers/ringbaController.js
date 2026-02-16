@@ -76,8 +76,8 @@ function validateRingbaPayload(body) {
 
 /**
  * Validate Roku-only conversion payload.
- * Required per conversion: roku_api_key, phone.
- * event_group_id (or "event" from Ringba): per conversion or body.
+ * Required: phone per conversion; roku_api_key and event (or event_group_id) per conversion OR on body.
+ * Ringba may only pass through the first few keys per conversion; body-level fallbacks are supported.
  */
 function validateRokuPayload(body) {
   if (!body || typeof body !== "object") {
@@ -94,13 +94,14 @@ function validateRokuPayload(body) {
     const c = body.conversions[i];
     const errors = [];
 
-    const key = c.roku_api_key ?? c.rokuApiKey ?? "";
+    const key = c.roku_api_key ?? c.rokuApiKey ?? body.roku_api_key ?? body.rokuApiKey ?? "";
     if (typeof key !== "string" || key.trim() === "")
-      errors.push("roku_api_key is required");
+      errors.push("roku_api_key is required (per conversion or on body)");
     const eventGroupId =
-      c.event_group_id ?? c.eventGroupId ?? c.event ?? body.event_group_id ?? body.eventGroupId ?? body.event ?? "";
+      c.event_group_id ?? c.eventGroupId ?? c.event ?? c.Event ??
+      body.event_group_id ?? body.eventGroupId ?? body.event ?? body.Event ?? "";
     if (typeof eventGroupId !== "string" || eventGroupId.trim() === "")
-      errors.push("event_group_id or event is required (per conversion or body)");
+      errors.push("event_group_id or event is required (per conversion or on body)");
     const phone = getRawPhone(c);
     if (!phone) errors.push("phone (or caller_phone/callerPhone) is required");
 
@@ -227,13 +228,26 @@ async function handleRokuConversion(req, res) {
     const validation = validateRokuPayload(req.body);
     if (!validation.isValid) {
       console.error("❌ Roku validation failed:", validation.error);
+      console.error("❌ Body-level event/event_group_id:", {
+        event: req.body?.event,
+        event_group_id: req.body?.event_group_id,
+        eventGroupId: req.body?.eventGroupId,
+      });
       console.error("❌ Request body that failed validation:", JSON.stringify(req.body?.conversions ?? req.body, null, 2));
       return res.status(400).json({ success: false, error: validation.error });
     }
 
-    const conversions = req.body.conversions;
+    // Merge body-level roku_api_key and event into each conversion (Ringba may drop keys; body fallback fixes that)
+    const bodyApiKey = (req.body.roku_api_key ?? req.body.rokuApiKey ?? "").trim();
+    const bodyEvent = (req.body.event_group_id ?? req.body.eventGroupId ?? req.body.event ?? req.body.Event ?? "").trim();
+    const conversions = req.body.conversions.map((c) => ({
+      ...c,
+      roku_api_key: (c.roku_api_key ?? c.rokuApiKey ?? bodyApiKey).trim() || bodyApiKey,
+      event_group_id: (c.event_group_id ?? c.eventGroupId ?? c.event ?? c.Event ?? bodyEvent).trim() || bodyEvent,
+    }));
+
     const rokuResults = await rokuConversionService.sendConversionsToRoku(conversions, {
-      defaultEventGroupId: req.body.event_group_id ?? req.body.eventGroupId ?? req.body.event,
+      defaultEventGroupId: req.body.event_group_id ?? req.body.eventGroupId ?? req.body.event ?? req.body.Event,
     });
 
     // Debug: write one JSON file per Roku conversion
