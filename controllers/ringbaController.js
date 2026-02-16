@@ -76,16 +76,23 @@ function validateRingbaPayload(body) {
 
 /**
  * Validate Roku-only conversion payload.
- * Required: phone per conversion; roku_api_key and event (or event_group_id) per conversion OR on body.
- * Ringba may only pass through the first few keys per conversion; body-level fallbacks are supported.
+ * Accepts either { conversions: [ {...} ] } OR a flat object with the 4 keys (Ringba format).
+ * We only require: phone, roku_api_key, event_group_id (or event). We build Roku format on send.
  */
 function validateRokuPayload(body) {
-  if (!body || typeof body !== "object") {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { isValid: false, error: "Invalid request body: body must be a valid JSON object" };
   }
+
+  // Flat format from Ringba: single object with event_group_id, roku_api_key, phone, event_id
   if (!body.conversions || !Array.isArray(body.conversions)) {
-    return { isValid: false, error: "Missing or invalid 'conversions' array" };
+    const key = (body.roku_api_key ?? body.rokuApiKey ?? "").trim();
+    const eventGroupId = (body.event_group_id ?? body.eventGroupId ?? body.event ?? body.Event ?? "").trim();
+    const phone = getRawPhone(body);
+    if (key && eventGroupId && phone) return { isValid: true };
+    return { isValid: false, error: "Missing or invalid 'conversions' array, or provide flat object with event_group_id, roku_api_key, and phone" };
   }
+
   if (body.conversions.length === 0) {
     return { isValid: false, error: "Conversions array cannot be empty" };
   }
@@ -219,12 +226,10 @@ async function handleRokuConversion(req, res) {
       });
     }
 
-    // Normalize: if Ringba sends a flat object (no "conversions" array), treat body as single conversion
+    // Normalize: Ringba sends only 4 keys (no "conversions" array). We wrap as single conversion; we build Roku format later.
     let body = req.body;
     if (!body.conversions || !Array.isArray(body.conversions)) {
-      const hasFlatConversion =
-        body && typeof body === "object" && (body.phone != null || body.roku_api_key != null || body.event_group_id != null);
-      if (hasFlatConversion) {
+      if (body && typeof body === "object" && !Array.isArray(body)) {
         body = { conversions: [body] };
         console.log("📥 Roku: normalized flat body to single conversion");
       }
@@ -248,6 +253,11 @@ async function handleRokuConversion(req, res) {
       });
       console.error("❌ Request body that failed validation:", JSON.stringify(body?.conversions ?? body, null, 2));
       return res.status(400).json({ success: false, error: validation.error });
+    }
+
+    // If validation accepted flat body (no conversions array), normalize now so rest of handler has body.conversions
+    if (!body.conversions || !Array.isArray(body.conversions)) {
+      body = { conversions: [body] };
     }
 
     // Merge body-level roku_api_key and event into each conversion (Ringba may drop keys; body fallback fixes that)
