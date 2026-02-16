@@ -127,17 +127,22 @@ async function handleRingbaConversion(req, res) {
     let rokuResults = null;
 
     if (cm360Conversions.length > 0) {
-      console.log("📤 Sending to CM360:", cm360Conversions.length, "conversion(s)");
-      cm360Response = await cm360Service.sendConversionsToCM360(cm360Conversions);
-      if (cm360Response.hasFailures && cm360Response.status) {
-        for (const statusItem of cm360Response.status) {
-          if (statusItem.errors && statusItem.errors.length > 0) {
-            const ordinal = statusItem.conversion?.ordinal || "UNKNOWN";
-            const errorMessages = statusItem.errors.map((e) => e.message).join("; ");
-            await slackService.sendSlackMessage(`${ordinal} failed. Err message : ${errorMessages}`);
-            console.error("❌ CM360 conversion error:", { ordinal, errors: errorMessages });
+      try {
+        console.log("📤 Sending to CM360:", cm360Conversions.length, "conversion(s)");
+        cm360Response = await cm360Service.sendConversionsToCM360(cm360Conversions);
+        if (cm360Response.hasFailures && cm360Response.status) {
+          for (const statusItem of cm360Response.status) {
+            if (statusItem.errors && statusItem.errors.length > 0) {
+              const ordinal = statusItem.conversion?.ordinal || "UNKNOWN";
+              const errorMessages = statusItem.errors.map((e) => e.message).join("; ");
+              await slackService.sendSlackMessage(`${ordinal} failed. Err message : ${errorMessages}`);
+              console.error("❌ CM360 conversion error:", { ordinal, errors: errorMessages });
+            }
           }
         }
+      } catch (cm360Err) {
+        console.error("❌ CM360 request failed (Roku will still run if applicable):", cm360Err.message);
+        cm360Response = { error: cm360Err.message, hasFailures: true };
       }
     }
 
@@ -152,6 +157,7 @@ async function handleRingbaConversion(req, res) {
           fs.mkdirSync(CATCH_ROKU_DIR, { recursive: true });
         }
         const ts = Date.now();
+        console.log("📁 catchRoku: writing to", CATCH_ROKU_DIR, "count:", rokuResults.length);
         rokuResults.forEach((result, i) => {
           const filename = `${CATCH_ROKU_PREFIX}-${ts}-${i}.json`;
           const filepath = path.join(CATCH_ROKU_DIR, filename);
@@ -162,17 +168,25 @@ async function handleRingbaConversion(req, res) {
             rokuError: result.error ?? null,
           };
           fs.writeFileSync(filepath, JSON.stringify(payload, null, 2), "utf8");
+          console.log("📁 catchRoku: wrote", filename);
         });
       } catch (writeErr) {
-        console.warn("⚠️ catchRoku write failed:", writeErr.message);
+        console.error("⚠️ catchRoku write failed:", writeErr.message, "path:", CATCH_ROKU_DIR, "code:", writeErr.code);
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      ...(cm360Response !== null && { cm360Response }),
-      ...(rokuResults !== null && { rokuResults }),
-    });
+    // Build response with plain objects only (avoid 500 if Ringba sends non-JSON-serializable data)
+    const responsePayload = { success: true };
+    if (cm360Response !== null) responsePayload.cm360Response = cm360Response;
+    if (rokuResults !== null) {
+      responsePayload.rokuResults = rokuResults.map((r) => ({
+        conversion: r.conversion && typeof r.conversion === "object" ? { ...r.conversion } : r.conversion,
+        sentToRoku: r.sentToRoku ?? null,
+        response: r.response ?? null,
+        error: typeof r.error === "string" ? r.error : (r.error ?? null),
+      }));
+    }
+    return res.status(200).json(responsePayload);
   } catch (error) {
     console.error("❌ Ringba conversion handler error:", {
       error: error.message,
