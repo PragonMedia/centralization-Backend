@@ -150,6 +150,16 @@ async function handleRingbaConversion(req, res) {
       });
     }
 
+    // Roku flat body sent to CM360 endpoint by mistake → tell them to use Roku URL
+    const b = req.body;
+    if ((!b.conversions || !Array.isArray(b.conversions)) && b.roku_api_key && (b.event_group_id || b.event) && (b.phone || b.caller_phone || b.callerPhone)) {
+      console.error("❌ Roku conversion sent to CM360 endpoint. Use POST /ringba/roku/conversion");
+      return res.status(400).json({
+        success: false,
+        error: "Roku conversion detected. Send this request to POST /ringba/roku/conversion (not /ringba/conversion). Update your Ringba webhook URL.",
+      });
+    }
+
     const validation = validateRingbaPayload(req.body);
     if (!validation.isValid) {
       console.error("❌ Validation failed:", validation.error);
@@ -272,6 +282,19 @@ async function handleRokuConversion(req, res) {
     const rokuResults = await rokuConversionService.sendConversionsToRoku(conversions, {
       defaultEventGroupId: body.event_group_id ?? body.eventGroupId ?? body.event ?? body.Event,
     });
+
+    // Slack notification for Roku failures (same pattern as CM360)
+    for (const result of rokuResults) {
+      if (result.error) {
+        const phone =
+          result.conversion?.phone ??
+          result.conversion?.caller_phone ??
+          result.conversion?.callerPhone ??
+          "unknown";
+        const errMsg = typeof result.error === "string" ? result.error : JSON.stringify(result.error);
+        await slackService.sendSlackMessage(`ROKU: conversion fail for caller : ${phone}. Err message : ${errMsg}`);
+      }
+    }
 
     // Debug: write one JSON file per Roku conversion
     try {
