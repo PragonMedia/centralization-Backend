@@ -116,6 +116,7 @@ async function handleRingbaConversion(req, res) {
     const validation = validateRingbaPayload(req.body);
     if (!validation.isValid) {
       console.error("❌ Validation failed:", validation.error);
+      console.error("❌ Request body that failed validation:", JSON.stringify(req.body?.conversions ?? req.body, null, 2));
       return res.status(400).json({ success: false, error: validation.error });
     }
 
