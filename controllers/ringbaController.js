@@ -1,6 +1,11 @@
+const fs = require("fs");
+const path = require("path");
 const cm360Service = require("../services/cm360Service");
 const rokuConversionService = require("../services/rokuConversionService");
 const slackService = require("../services/slackService");
+
+const CATCH_ROKU_DIR = path.join(__dirname, "..", "logs");
+const CATCH_ROKU_PREFIX = "catchRoku";
 
 function hasDclid(conversion) {
   return (
@@ -141,6 +146,26 @@ async function handleRingbaConversion(req, res) {
       rokuResults = await rokuConversionService.sendConversionsToRoku(rokuConversions, {
         defaultEventGroupId: req.body.event_group_id ?? req.body.eventGroupId,
       });
+      // Debug: write one JSON file per Roku conversion (received from Ringba + sent to Roku)
+      try {
+        if (!fs.existsSync(CATCH_ROKU_DIR)) {
+          fs.mkdirSync(CATCH_ROKU_DIR, { recursive: true });
+        }
+        const ts = Date.now();
+        rokuResults.forEach((result, i) => {
+          const filename = `${CATCH_ROKU_PREFIX}-${ts}-${i}.json`;
+          const filepath = path.join(CATCH_ROKU_DIR, filename);
+          const payload = {
+            receivedFromRingba: result.conversion,
+            sentToRoku: result.sentToRoku ?? null,
+            rokuResponse: result.response ?? null,
+            rokuError: result.error ?? null,
+          };
+          fs.writeFileSync(filepath, JSON.stringify(payload, null, 2), "utf8");
+        });
+      } catch (writeErr) {
+        console.warn("⚠️ catchRoku write failed:", writeErr.message);
+      }
     }
 
     return res.status(200).json({
