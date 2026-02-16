@@ -75,7 +75,9 @@ function validateRingbaPayload(body) {
 }
 
 /**
- * Validate Roku-only conversion payload. Required per conversion: event_group_id, roku_api_key, phone.
+ * Validate Roku-only conversion payload.
+ * Required per conversion: roku_api_key, phone.
+ * event_group_id (or "event" from Ringba): per conversion or body.
  */
 function validateRokuPayload(body) {
   if (!body || typeof body !== "object") {
@@ -96,9 +98,9 @@ function validateRokuPayload(body) {
     if (typeof key !== "string" || key.trim() === "")
       errors.push("roku_api_key is required");
     const eventGroupId =
-      c.event_group_id ?? c.eventGroupId ?? body.event_group_id ?? body.eventGroupId ?? "";
+      c.event_group_id ?? c.eventGroupId ?? c.event ?? body.event_group_id ?? body.eventGroupId ?? body.event ?? "";
     if (typeof eventGroupId !== "string" || eventGroupId.trim() === "")
-      errors.push("event_group_id is required (per conversion or body)");
+      errors.push("event_group_id or event is required (per conversion or body)");
     const phone = getRawPhone(c);
     if (!phone) errors.push("phone (or caller_phone/callerPhone) is required");
 
@@ -231,7 +233,7 @@ async function handleRokuConversion(req, res) {
 
     const conversions = req.body.conversions;
     const rokuResults = await rokuConversionService.sendConversionsToRoku(conversions, {
-      defaultEventGroupId: req.body.event_group_id ?? req.body.eventGroupId,
+      defaultEventGroupId: req.body.event_group_id ?? req.body.eventGroupId ?? req.body.event,
     });
 
     // Debug: write one JSON file per Roku conversion

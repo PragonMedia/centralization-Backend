@@ -143,6 +143,7 @@ function timestampMicrosToEpochSeconds(timestampMicros) {
 /**
  * Build one Roku event from Ringba conversion (no dclid path)
  * event_group_id from Ringba (conversion or defaultEventGroupId fallback).
+ * event_id from Ringba (pass-through, not hashed) for Roku deduplication.
  * event_time = server time (Date.now() → epoch seconds).
  * user_data: ph (hashed) always; em, fn, ln (hashed) when from DataZapp; ct, st, zp, country (not hashed) when present.
  */
@@ -150,8 +151,11 @@ function buildRokuEvent(conversion, options = {}) {
   const eventGroupId =
     conversion.event_group_id ??
     conversion.eventGroupId ??
+    conversion.event ??
     options.defaultEventGroupId ??
     "";
+  const eventIdRaw = conversion.event_id ?? conversion.eventId ?? "";
+  const eventId = typeof eventIdRaw === "string" ? eventIdRaw.trim() : "";
   const rawPhone =
     conversion.phone ??
     conversion.caller_phone ??
@@ -193,17 +197,20 @@ function buildRokuEvent(conversion, options = {}) {
 
   const eventTime = Math.floor(Date.now() / 1000);
 
+  const eventPayload = {
+    event_name: "LEAD",
+    event_source: "phone_call",
+    event_time: eventTime,
+    event_type: "conversion",
+    user_data: userData,
+  };
+  if (eventId) {
+    eventPayload.event_id = eventId;
+  }
+
   return {
     event_group_id: eventGroupId,
-    events: [
-      {
-        event_name: "LEAD",
-        event_source: "phone_call",
-        event_time: eventTime,
-        event_type: "conversion",
-        user_data: userData,
-      },
-    ],
+    events: [eventPayload],
   };
 }
 
@@ -229,7 +236,7 @@ async function sendConversionsToRoku(conversions, options = {}) {
     }
 
     const eventGroupId =
-      (conversion.event_group_id ?? conversion.eventGroupId ?? options.defaultEventGroupId ?? "").trim();
+      (conversion.event_group_id ?? conversion.eventGroupId ?? conversion.event ?? options.defaultEventGroupId ?? "").trim();
     const skipDataZapp = eventGroupId === EVENT_GROUP_ID_SKIP_DATAZAPP;
 
     let callerData = null;
