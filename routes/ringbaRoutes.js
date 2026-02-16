@@ -12,9 +12,16 @@ const ringbaController = require("../controllers/ringbaController");
  * (150-200 req/sec expected from Ringba account)
  */
 
-// POST /ringba/conversion
-// Receives conversion data from Ringba and forwards to CM360
+// POST /ringba/conversion — CM360 only
 router.post("/conversion", ringbaController.handleRingbaConversion);
 
+// POST /ringba/roku/conversion — Roku CAPI only
+router.post("/roku/conversion", ringbaController.handleRokuConversion);
+
 module.exports = router;
+
+
+
+
+
 

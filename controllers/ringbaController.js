@@ -31,10 +31,8 @@ function getRawPhone(conversion) {
 }
 
 /**
- * Validate incoming Ringba conversion payload
- * dclid + roku_api_key → Roku only. dclid only → CM360 only. roku_api_key only (no dclid) → Roku only.
- * CM360 path (dclid, no roku_api_key): floodlightConfigurationId, floodlightActivityId, ordinal, timestampMicros
- * Roku path (has roku_api_key, with or without dclid): event_group_id (per conversion or body), phone
+ * Validate incoming Ringba conversion payload (CM360 only).
+ * Each conversion must have dclid and CM360 fields. For Roku use POST /ringba/roku/conversion.
  */
 function validateRingbaPayload(body) {
   if (!body || typeof body !== "object") {
@@ -51,14 +49,9 @@ function validateRingbaPayload(body) {
     const c = body.conversions[i];
     const errors = [];
 
-    if (hasRokuApiKey(c)) {
-      const eventGroupId =
-        c.event_group_id ?? c.eventGroupId ?? body.event_group_id ?? body.eventGroupId ?? "";
-      if (typeof eventGroupId !== "string" || eventGroupId.trim() === "")
-        errors.push("event_group_id is required for Roku (from Ringba, per conversion or body)");
-      const phone = getRawPhone(c);
-      if (!phone) errors.push("phone (or caller_phone/callerPhone) is required for Roku");
-    } else if (hasDclid(c)) {
+    if (!hasDclid(c)) {
+      errors.push("conversion must have dclid for CM360 (for Roku use POST /ringba/roku/conversion)");
+    } else {
       if (!c.timestampMicros || typeof c.timestampMicros !== "string" || c.timestampMicros.trim() === "") {
         errors.push("timestampMicros is required and must be a non-empty string");
       } else {
@@ -71,9 +64,43 @@ function validateRingbaPayload(body) {
         errors.push("floodlightActivityId is required for CM360");
       if (!c.ordinal || typeof c.ordinal !== "string" || c.ordinal.trim() === "")
         errors.push("ordinal is required for CM360");
-    } else {
-      errors.push("conversion must have dclid (for CM360) or roku_api_key (for Roku)");
     }
+
+    if (errors.length > 0) {
+      return { isValid: false, error: `Validation failed for conversion at index ${i}: ${errors.join(", ")}` };
+    }
+  }
+
+  return { isValid: true };
+}
+
+/**
+ * Validate Roku-only conversion payload. Required per conversion: event_group_id, roku_api_key, phone.
+ */
+function validateRokuPayload(body) {
+  if (!body || typeof body !== "object") {
+    return { isValid: false, error: "Invalid request body: body must be a valid JSON object" };
+  }
+  if (!body.conversions || !Array.isArray(body.conversions)) {
+    return { isValid: false, error: "Missing or invalid 'conversions' array" };
+  }
+  if (body.conversions.length === 0) {
+    return { isValid: false, error: "Conversions array cannot be empty" };
+  }
+
+  for (let i = 0; i < body.conversions.length; i++) {
+    const c = body.conversions[i];
+    const errors = [];
+
+    const key = c.roku_api_key ?? c.rokuApiKey ?? "";
+    if (typeof key !== "string" || key.trim() === "")
+      errors.push("roku_api_key is required");
+    const eventGroupId =
+      c.event_group_id ?? c.eventGroupId ?? body.event_group_id ?? body.eventGroupId ?? "";
+    if (typeof eventGroupId !== "string" || eventGroupId.trim() === "")
+      errors.push("event_group_id is required (per conversion or body)");
+    const phone = getRawPhone(c);
+    if (!phone) errors.push("phone (or caller_phone/callerPhone) is required");
 
     if (errors.length > 0) {
       return { isValid: false, error: `Validation failed for conversion at index ${i}: ${errors.join(", ")}` };
@@ -121,12 +148,9 @@ async function handleRingbaConversion(req, res) {
     }
 
     const conversions = req.body.conversions;
-    const cm360Conversions = conversions.filter((c) => hasDclid(c) && !hasRokuApiKey(c));
-    const rokuConversions = conversions.filter(hasRokuApiKey);
+    const cm360Conversions = conversions.filter(hasDclid);
 
     let cm360Response = null;
-    let rokuResults = null;
-
     if (cm360Conversions.length > 0) {
       try {
         console.log("📤 Sending to CM360:", cm360Conversions.length, "conversion(s)");
@@ -142,52 +166,15 @@ async function handleRingbaConversion(req, res) {
           }
         }
       } catch (cm360Err) {
-        console.error("❌ CM360 request failed (Roku will still run if applicable):", cm360Err.message);
+        console.error("❌ CM360 request failed:", cm360Err.message);
         cm360Response = { error: cm360Err.message, hasFailures: true };
       }
     }
 
-    if (rokuConversions.length > 0) {
-      console.log("📤 Sending to Roku CAPI:", rokuConversions.length, "conversion(s)");
-      rokuResults = await rokuConversionService.sendConversionsToRoku(rokuConversions, {
-        defaultEventGroupId: req.body.event_group_id ?? req.body.eventGroupId,
-      });
-      // Debug: write one JSON file per Roku conversion (received from Ringba + sent to Roku)
-      try {
-        if (!fs.existsSync(CATCH_ROKU_DIR)) {
-          fs.mkdirSync(CATCH_ROKU_DIR, { recursive: true });
-        }
-        const ts = Date.now();
-        console.log("📁 catchRoku: writing to", CATCH_ROKU_DIR, "count:", rokuResults.length);
-        rokuResults.forEach((result, i) => {
-          const filename = `${CATCH_ROKU_PREFIX}-${ts}-${i}.json`;
-          const filepath = path.join(CATCH_ROKU_DIR, filename);
-          const payload = {
-            receivedFromRingba: result.conversion,
-            sentToRoku: result.sentToRoku ?? null,
-            rokuResponse: result.response ?? null,
-            rokuError: result.error ?? null,
-          };
-          fs.writeFileSync(filepath, JSON.stringify(payload, null, 2), "utf8");
-          console.log("📁 catchRoku: wrote", filename);
-        });
-      } catch (writeErr) {
-        console.error("⚠️ catchRoku write failed:", writeErr.message, "path:", CATCH_ROKU_DIR, "code:", writeErr.code);
-      }
-    }
-
-    // Build response with plain objects only (avoid 500 if Ringba sends non-JSON-serializable data)
-    const responsePayload = { success: true };
-    if (cm360Response !== null) responsePayload.cm360Response = cm360Response;
-    if (rokuResults !== null) {
-      responsePayload.rokuResults = rokuResults.map((r) => ({
-        conversion: r.conversion && typeof r.conversion === "object" ? { ...r.conversion } : r.conversion,
-        sentToRoku: r.sentToRoku ?? null,
-        response: r.response ?? null,
-        error: typeof r.error === "string" ? r.error : (r.error ?? null),
-      }));
-    }
-    return res.status(200).json(responsePayload);
+    return res.status(200).json({
+      success: true,
+      ...(cm360Response !== null && { cm360Response }),
+    });
   } catch (error) {
     console.error("❌ Ringba conversion handler error:", {
       error: error.message,
@@ -213,6 +200,80 @@ async function handleRingbaConversion(req, res) {
   }
 }
 
+/**
+ * Handle Roku-only conversion request
+ * POST /ringba/roku/conversion
+ * Body: { conversions: [ { event_group_id, roku_api_key, phone, event_id? } ] }
+ */
+async function handleRokuConversion(req, res) {
+  try {
+    console.log("📥 Roku conversion webhook received:", {
+      timestamp: new Date().toISOString(),
+      conversionsCount: req.body?.conversions?.length || 0,
+    });
+    if (req.body && req.body.conversions) {
+      console.log("📥 Roku body (conversions):", JSON.stringify(req.body.conversions, null, 2));
+    }
+
+    if (!req.body) {
+      return res.status(400).json({
+        success: false,
+        error: "Request body is missing or could not be parsed. Ensure Content-Type is application/json",
+      });
+    }
+
+    const validation = validateRokuPayload(req.body);
+    if (!validation.isValid) {
+      console.error("❌ Roku validation failed:", validation.error);
+      console.error("❌ Request body that failed validation:", JSON.stringify(req.body?.conversions ?? req.body, null, 2));
+      return res.status(400).json({ success: false, error: validation.error });
+    }
+
+    const conversions = req.body.conversions;
+    const rokuResults = await rokuConversionService.sendConversionsToRoku(conversions, {
+      defaultEventGroupId: req.body.event_group_id ?? req.body.eventGroupId,
+    });
+
+    // Debug: write one JSON file per Roku conversion
+    try {
+      if (!fs.existsSync(CATCH_ROKU_DIR)) {
+        fs.mkdirSync(CATCH_ROKU_DIR, { recursive: true });
+      }
+      const ts = Date.now();
+      console.log("📁 catchRoku: writing to", CATCH_ROKU_DIR, "count:", rokuResults.length);
+      rokuResults.forEach((result, i) => {
+        const filename = `${CATCH_ROKU_PREFIX}-${ts}-${i}.json`;
+        const filepath = path.join(CATCH_ROKU_DIR, filename);
+        const payload = {
+          receivedFromRingba: result.conversion,
+          sentToRoku: result.sentToRoku ?? null,
+          rokuResponse: result.response ?? null,
+          rokuError: result.error ?? null,
+        };
+        fs.writeFileSync(filepath, JSON.stringify(payload, null, 2), "utf8");
+        console.log("📁 catchRoku: wrote", filename);
+      });
+    } catch (writeErr) {
+      console.error("⚠️ catchRoku write failed:", writeErr.message, "path:", CATCH_ROKU_DIR, "code:", writeErr.code);
+    }
+
+    const responsePayload = {
+      success: true,
+      rokuResults: rokuResults.map((r) => ({
+        conversion: r.conversion && typeof r.conversion === "object" ? { ...r.conversion } : r.conversion,
+        sentToRoku: r.sentToRoku ?? null,
+        response: r.response ?? null,
+        error: typeof r.error === "string" ? r.error : (r.error ?? null),
+      })),
+    };
+    return res.status(200).json(responsePayload);
+  } catch (error) {
+    console.error("❌ Roku conversion handler error:", { error: error.message, stack: error.stack });
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
 module.exports = {
   handleRingbaConversion,
+  handleRokuConversion,
 };
