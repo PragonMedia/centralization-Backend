@@ -265,9 +265,7 @@ function buildRokuEvent(conversion, options = {}) {
   if (options.callerZip != null && String(options.callerZip).trim()) {
     userData.zp = String(options.callerZip).trim();
   }
-  if (options.callerCountry && typeof options.callerCountry === "string" && options.callerCountry.trim()) {
-    userData.country = options.callerCountry.trim();
-  }
+  userData.country = "US";
 
   const eventTime = Math.floor(Date.now() / 1000);
 
