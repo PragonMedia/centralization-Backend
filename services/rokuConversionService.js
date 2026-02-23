@@ -11,8 +11,8 @@ const axios = require("axios");
 const ROKU_CONFIG = require("../config/roku");
 const DATAZAPP_CONFIG = require("../config/datazapp");
 
-/** When event_group_id equals this value, we do NOT call DataZapp; send standard data (phone only) to Roku. */
-const EVENT_GROUP_ID_SKIP_DATAZAPP = "PaccoQNinGRp";
+/** When event_group_id equals this value, we call DataZapp and send enriched data to Roku. Otherwise we send phone + country US only. */
+const EVENT_GROUP_ID_USE_DATAZAPP = "PaccoQNinGRp";
 
 /** 1-hour dedupe: do not send the same caller to Roku more than once per hour. */
 const RECENT_CALLERS_TTL_MS = 60 * 60 * 1000;
@@ -315,10 +315,10 @@ async function sendConversionsToRoku(conversions, options = {}) {
 
     const eventGroupId =
       (conversion.event_group_id ?? conversion.eventGroupId ?? conversion.event ?? conversion.Event ?? options.defaultEventGroupId ?? "").trim();
-    const skipDataZapp = eventGroupId === EVENT_GROUP_ID_SKIP_DATAZAPP;
+    const useDataZapp = eventGroupId === EVENT_GROUP_ID_USE_DATAZAPP;
 
     let callerData = null;
-    if (!skipDataZapp) {
+    if (useDataZapp) {
       callerData = await getCallerDataFromDataZapp(conversion);
     }
 
