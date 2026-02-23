@@ -5,12 +5,85 @@
  */
 
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const axios = require("axios");
 const ROKU_CONFIG = require("../config/roku");
 const DATAZAPP_CONFIG = require("../config/datazapp");
 
 /** When event_group_id equals this value, we do NOT call DataZapp; send standard data (phone only) to Roku. */
 const EVENT_GROUP_ID_SKIP_DATAZAPP = "Paccfsif7EU7";
+
+/** 1-hour dedupe: do not send the same caller to Roku more than once per hour. */
+const RECENT_CALLERS_TTL_MS = 60 * 60 * 1000;
+const RECENT_CALLERS_FILE = path.join(__dirname, "..", "logs", "roku-recent-callers.json");
+let recentCallersLock = null;
+
+/**
+ * Run a function with exclusive lock so only one read-modify-write on recent callers runs at a time.
+ */
+async function withRecentCallersLock(fn) {
+  const next = (recentCallersLock || Promise.resolve()).then(() => fn()).then(
+    (r) => {
+      recentCallersLock = null;
+      return r;
+    },
+    (e) => {
+      recentCallersLock = null;
+      throw e;
+    }
+  );
+  recentCallersLock = next;
+  return next;
+}
+
+/**
+ * Read recent-callers file, prune entries older than 1 hour, return list and set of normalized phones.
+ */
+async function getRecentCallers() {
+  let list = [];
+  try {
+    const raw = await fs.promises.readFile(RECENT_CALLERS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) list = parsed;
+  } catch (e) {
+    if (e.code !== "ENOENT") console.warn("📋 Roku recent-callers read failed:", e.message);
+  }
+  const now = Date.now();
+  const pruned = list.filter((entry) => entry && entry.ts && now - entry.ts < RECENT_CALLERS_TTL_MS);
+  const set = new Set(pruned.map((e) => e.phone).filter(Boolean));
+  return { list: pruned, set };
+}
+
+/**
+ * Write recent-callers list to file (directory created if needed).
+ */
+async function writeRecentCallersFile(list) {
+  const dir = path.dirname(RECENT_CALLERS_FILE);
+  await fs.promises.mkdir(dir, { recursive: true });
+  await fs.promises.writeFile(RECENT_CALLERS_FILE, JSON.stringify(list, null, 0), "utf8");
+}
+
+/**
+ * If this conversion's phone is already in the recent-callers list (within 1 hour), return true (duplicate).
+ * Otherwise add the phone to the list and return false (proceed to send to Roku).
+ */
+async function isDuplicateAndAdd(conversion) {
+  const raw = getRawPhoneForLookup(conversion);
+  const phone = normalizePhone(raw);
+  if (!phone) return false;
+
+  return withRecentCallersLock(async () => {
+    const { list, set } = await getRecentCallers();
+    if (set.has(phone)) {
+      console.log("📋 Roku: skipping duplicate caller within 1h:", phone);
+      return true;
+    }
+    list.push({ phone, ts: Date.now() });
+    await writeRecentCallersFile(list);
+    return false;
+  });
+}
 
 /**
  * Normalize raw phone for Roku before hashing (per Roku docs)
@@ -152,6 +225,7 @@ function buildRokuEvent(conversion, options = {}) {
     conversion.event_group_id ??
     conversion.eventGroupId ??
     conversion.event ??
+    conversion.Event ??
     options.defaultEventGroupId ??
     "";
   const eventIdRaw = conversion.event_id ?? conversion.eventId ?? "";
@@ -235,8 +309,14 @@ async function sendConversionsToRoku(conversions, options = {}) {
       continue;
     }
 
+    const isDuplicate = await isDuplicateAndAdd(conversion);
+    if (isDuplicate) {
+      results.push({ conversion, skipped: true });
+      continue;
+    }
+
     const eventGroupId =
-      (conversion.event_group_id ?? conversion.eventGroupId ?? conversion.event ?? options.defaultEventGroupId ?? "").trim();
+      (conversion.event_group_id ?? conversion.eventGroupId ?? conversion.event ?? conversion.Event ?? options.defaultEventGroupId ?? "").trim();
     const skipDataZapp = eventGroupId === EVENT_GROUP_ID_SKIP_DATAZAPP;
 
     let callerData = null;

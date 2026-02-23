@@ -311,6 +311,7 @@ async function handleRokuConversion(req, res) {
           sentToRoku: result.sentToRoku ?? null,
           rokuResponse: result.response ?? null,
           rokuError: result.error ?? null,
+          skipped: result.skipped === true,
         };
         fs.writeFileSync(filepath, JSON.stringify(payload, null, 2), "utf8");
         console.log("📁 catchRoku: wrote", filename);
@@ -326,6 +327,7 @@ async function handleRokuConversion(req, res) {
         sentToRoku: r.sentToRoku ?? null,
         response: r.response ?? null,
         error: typeof r.error === "string" ? r.error : (r.error ?? null),
+        skipped: r.skipped === true,
       })),
     };
     return res.status(200).json(responsePayload);
