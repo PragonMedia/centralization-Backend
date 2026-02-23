@@ -12,7 +12,7 @@ const ROKU_CONFIG = require("../config/roku");
 const DATAZAPP_CONFIG = require("../config/datazapp");
 
 /** When event_group_id equals this value, we do NOT call DataZapp; send standard data (phone only) to Roku. */
-const EVENT_GROUP_ID_SKIP_DATAZAPP = "Paccfsif7EU7";
+const EVENT_GROUP_ID_SKIP_DATAZAPP = "PaccoQNinGRp";
 
 /** 1-hour dedupe: do not send the same caller to Roku more than once per hour. */
 const RECENT_CALLERS_TTL_MS = 60 * 60 * 1000;
