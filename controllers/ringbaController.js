@@ -320,8 +320,9 @@ async function handleRokuConversion(req, res) {
       console.error("⚠️ catchRoku write failed:", writeErr.message, "path:", CATCH_ROKU_DIR, "code:", writeErr.code);
     }
 
+    const hasRokuErrors = rokuResults.some((r) => r.error != null);
     const responsePayload = {
-      success: true,
+      success: !hasRokuErrors,
       rokuResults: rokuResults.map((r) => ({
         conversion: r.conversion && typeof r.conversion === "object" ? { ...r.conversion } : r.conversion,
         sentToRoku: r.sentToRoku ?? null,
@@ -330,7 +331,8 @@ async function handleRokuConversion(req, res) {
         skipped: r.skipped === true,
       })),
     };
-    return res.status(200).json(responsePayload);
+    const statusCode = hasRokuErrors ? 502 : 200;
+    return res.status(statusCode).json(responsePayload);
   } catch (error) {
     console.error("❌ Roku conversion handler error:", { error: error.message, stack: error.stack });
     return res.status(500).json({ success: false, error: error.message });
