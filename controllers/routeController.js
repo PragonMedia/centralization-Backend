@@ -942,6 +942,7 @@ exports.updateDomainName = async (req, res) => {
     }
 
     // Update rtkID if provided (accept empty strings and convert to null)
+    // When updating domain-level rtkID, also update rtkID on every route so they stay in sync
     if (newRtkID !== undefined) {
       if (typeof newRtkID !== "string") {
         return res.status(400).json({
@@ -950,8 +951,15 @@ exports.updateDomainName = async (req, res) => {
       }
       // Convert empty string or whitespace-only to null
       const trimmedRtkID = newRtkID.trim();
-      newValues.rtkID = trimmedRtkID.length > 0 ? trimmedRtkID : null;
-      domainDoc.rtkID = trimmedRtkID.length > 0 ? trimmedRtkID : null;
+      const valueToSet = trimmedRtkID.length > 0 ? trimmedRtkID : null;
+      newValues.rtkID = valueToSet;
+      domainDoc.rtkID = valueToSet;
+      // Sync rtkID to all routes so domain and routes share the same rtkID
+      if (domainDoc.routes && domainDoc.routes.length > 0) {
+        for (const r of domainDoc.routes) {
+          r.rtkID = valueToSet;
+        }
+      }
     }
 
     // Update certification tags if provided
@@ -1227,6 +1235,37 @@ exports.getRouteData = async (req, res) => {
 // In-memory cache for domain route details (reduces MongoDB queries)
 const routeDetailsCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache TTL
+const CACHE_MAX_SIZE = 5000; // Maximum cache entries before aggressive cleanup
+const CACHE_CLEANUP_INTERVAL = 2 * 60 * 1000; // Cleanup every 2 minutes
+
+// Periodic cache cleanup to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  
+  // Clean expired entries
+  for (const [key, value] of routeDetailsCache.entries()) {
+    if (now - value.timestamp > CACHE_TTL) {
+      routeDetailsCache.delete(key);
+      cleaned++;
+    }
+  }
+  
+  // If cache is still too large, remove oldest 20% of entries
+  if (routeDetailsCache.size > CACHE_MAX_SIZE) {
+    const entries = Array.from(routeDetailsCache.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const toRemove = Math.floor(routeDetailsCache.size * 0.2);
+    for (let i = 0; i < toRemove; i++) {
+      routeDetailsCache.delete(entries[i][0]);
+      cleaned++;
+    }
+  }
+  
+  if (cleaned > 0) {
+    console.log(`🧹 Cache cleanup: Removed ${cleaned} entries. Cache size: ${routeDetailsCache.size}`);
+  }
+}, CACHE_CLEANUP_INTERVAL);
 
 // GET DOMAIN ROUTE DETAILS (Optimized - uses query parameters + caching)
 // Endpoint: GET /api/v1/domain-route-details?domain=xxx&route=yyy
@@ -1316,13 +1355,18 @@ exports.getDomainRouteDetails = async (req, res) => {
       timestamp: Date.now(),
     });
 
-    // Clean up old cache entries periodically (prevent memory leak)
-    if (routeDetailsCache.size > 10000) {
+    // Emergency cleanup if cache grows too large (backup to periodic cleanup)
+    if (routeDetailsCache.size > CACHE_MAX_SIZE * 2) {
       const now = Date.now();
+      let cleaned = 0;
       for (const [key, value] of routeDetailsCache.entries()) {
         if (now - value.timestamp > CACHE_TTL) {
           routeDetailsCache.delete(key);
+          cleaned++;
         }
+      }
+      if (cleaned > 0) {
+        console.log(`⚠️ Emergency cache cleanup: Removed ${cleaned} expired entries`);
       }
     }
 
