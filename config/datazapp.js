@@ -5,6 +5,6 @@
  */
 module.exports = {
   API_URL: process.env.DATAZAPP_API_URL || "https://secureapi.datazapp.com/Appendv2",
-  API_KEY: "PDYLEQPGVK",
+  API_KEY: process.env.DATAZAPP_API_KEY || "PDYLEQPGVK",
   APPEND_MODULE: "ReversePhoneAppendAPI",
 };

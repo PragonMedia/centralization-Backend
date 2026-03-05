@@ -11,13 +11,30 @@ const axios = require("axios");
 const ROKU_CONFIG = require("../config/roku");
 const DATAZAPP_CONFIG = require("../config/datazapp");
 
-/** When event_group_id equals this value, we call DataZapp and send enriched data to Roku. Otherwise we send phone + country US only. */
-const EVENT_GROUP_ID_USE_DATAZAPP = "PaccoQNinGRp";
+/** Trigger DataZapp when Ringba sends a valid (non-empty) ip. No longer based on event_group_id. */
+function hasValidIp(conversion) {
+  const ip = conversion.ip ?? conversion.IP ?? "";
+  return typeof ip === "string" && ip.trim().length > 0;
+}
 
 /** 1-hour dedupe: do not send the same caller to Roku more than once per hour. */
 const RECENT_CALLERS_TTL_MS = 60 * 60 * 1000;
 const RECENT_CALLERS_FILE = path.join(__dirname, "..", "logs", "roku-recent-callers.json");
 let recentCallersLock = null;
+
+/** Temporary audit log: one JSON object per line (JSONL) for every call hitting Roku endpoint. */
+const ROKU_AUDIT_FILE = path.join(__dirname, "..", "logs", "roku-audit.jsonl");
+
+function appendRokuAudit(entry) {
+  try {
+    const dir = path.dirname(ROKU_AUDIT_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const line = JSON.stringify(entry) + "\n";
+    fs.appendFileSync(ROKU_AUDIT_FILE, line, "utf8");
+  } catch (e) {
+    console.warn("⚠️ Roku audit write failed:", e.message);
+  }
+}
 
 /**
  * Run a function with exclusive lock so only one read-modify-write on recent callers runs at a time.
@@ -304,18 +321,30 @@ async function sendConversionsToRoku(conversions, options = {}) {
     if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
       console.error("❌ Roku CAPI: missing roku_api_key on conversion (from Ringba)");
       results.push({ conversion, error: "roku_api_key is required from Ringba" });
+      appendRokuAudit({
+        timestamp: new Date().toISOString(),
+        receivedFromRingba: conversion,
+        dataZapp: { called: false, reason: "skipped (missing roku_api_key)" },
+        sentToRoku: null,
+        result: { success: false, reason: "roku_api_key is required from Ringba" },
+      });
       continue;
     }
 
     const isDuplicate = await isDuplicateAndAdd(conversion);
     if (isDuplicate) {
       results.push({ conversion, skipped: true });
+      appendRokuAudit({
+        timestamp: new Date().toISOString(),
+        receivedFromRingba: conversion,
+        dataZapp: { called: false, reason: "skipped (duplicate within 1h, did not call DataZapp)" },
+        sentToRoku: null,
+        result: { success: false, reason: "duplicate within 1 hour" },
+      });
       continue;
     }
 
-    const eventGroupId =
-      (conversion.event_group_id ?? conversion.eventGroupId ?? conversion.event ?? conversion.Event ?? options.defaultEventGroupId ?? "").trim();
-    const useDataZapp = eventGroupId === EVENT_GROUP_ID_USE_DATAZAPP;
+    const useDataZapp = hasValidIp(conversion);
 
     let callerData = null;
     if (useDataZapp) {
@@ -348,6 +377,13 @@ async function sendConversionsToRoku(conversions, options = {}) {
         event_group_id: payload.event_group_id,
         code: response.data?.code,
       });
+      appendRokuAudit({
+        timestamp: new Date().toISOString(),
+        receivedFromRingba: conversion,
+        dataZapp: { called: useDataZapp, data: callerData },
+        sentToRoku: payload,
+        result: { success: true, response: response.data },
+      });
     } catch (error) {
       const errMsg = error.response?.data
         ? JSON.stringify(error.response.data)
@@ -357,6 +393,13 @@ async function sendConversionsToRoku(conversions, options = {}) {
         conversion,
         ...(payload !== undefined && { sentToRoku: payload }),
         error: errMsg,
+      });
+      appendRokuAudit({
+        timestamp: new Date().toISOString(),
+        receivedFromRingba: conversion,
+        dataZapp: { called: useDataZapp, data: callerData },
+        sentToRoku: payload !== undefined ? payload : null,
+        result: { success: false, reason: errMsg },
       });
     }
   }
