@@ -235,7 +235,7 @@ function timestampMicrosToEpochSeconds(timestampMicros) {
  * event_group_id from Ringba (conversion or defaultEventGroupId fallback).
  * event_id from Ringba (pass-through, not hashed) for Roku deduplication.
  * event_time = server time (Date.now() → epoch seconds).
- * user_data: ph (hashed) always; em, fn, ln (hashed) when from DataZapp; ct, st, zp, country (not hashed) when present.
+ * user_data: ph (hashed) always; em, fn, ln (hashed) when from DataZapp; ct, st, zp from DataZapp or Ringba (conversion.ct/st/zp), country (not hashed) when present.
  */
 function buildRokuEvent(conversion, options = {}) {
   const eventGroupId =
@@ -273,15 +273,25 @@ function buildRokuEvent(conversion, options = {}) {
     const n = normalizeName(options.callerLastName.trim());
     if (n) userData.ln = sha256Hash(n);
   }
-  if (options.callerCity && typeof options.callerCity === "string" && options.callerCity.trim()) {
-    userData.ct = options.callerCity.trim();
-  }
-  if (options.callerState && typeof options.callerState === "string" && options.callerState.trim()) {
-    userData.st = options.callerState.trim();
-  }
-  if (options.callerZip != null && String(options.callerZip).trim()) {
-    userData.zp = String(options.callerZip).trim();
-  }
+  // City, state, zip: DataZapp first, then Ringba (ct, st, zp)
+  const city =
+    options.callerCity && typeof options.callerCity === "string" && options.callerCity.trim()
+      ? options.callerCity.trim()
+      : (conversion.ct ?? conversion.city ?? "").trim();
+  if (city) userData.ct = city;
+
+  const state =
+    options.callerState && typeof options.callerState === "string" && options.callerState.trim()
+      ? options.callerState.trim()
+      : (conversion.st ?? conversion.state ?? "").trim();
+  if (state) userData.st = state;
+
+  const zip =
+    options.callerZip != null && String(options.callerZip).trim()
+      ? String(options.callerZip).trim()
+      : (conversion.zp ?? conversion.zip ?? "").trim();
+  if (zip) userData.zp = zip;
+
   userData.country = "US";
 
   const eventTime = Math.floor(Date.now() / 1000);
