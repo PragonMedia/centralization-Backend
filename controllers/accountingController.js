@@ -1,38 +1,16 @@
 /**
  * Accounting controller – revenue from Ringba for frontend display.
+ * Auth not required for now; add Bearer token when ready.
  */
-const jwt = require("jsonwebtoken");
-const User = require("../models/userModel");
 const accountingService = require("../services/accountingService");
-
-async function getUserFromToken(req) {
-  try {
-    const token = req.headers.authorization?.replace("Bearer ", "");
-    if (!token) return null;
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "your-secret-key");
-    if (!decoded?.userId) return null;
-    const user = await User.findById(decoded.userId);
-    return user ? { email: user.email, role: user.role, userId: user._id.toString() } : null;
-  } catch (err) {
-    return null;
-  }
-}
 
 /**
  * GET /api/v1/accounting/revenue
- * Returns revenue data from Ringba for the frontend. Requires auth.
+ * Returns revenue data from Ringba for the frontend. No auth required (temporary).
  * Query: dateFrom, dateTo (ISO), accountId (optional).
  */
 exports.getRevenue = async (req, res) => {
   try {
-    const loggedInUser = await getUserFromToken(req);
-    if (!loggedInUser) {
-      return res.status(401).json({
-        success: false,
-        error: "Authentication required. Please provide a valid token.",
-      });
-    }
-
     const { dateFrom, dateTo, accountId } = req.query;
     const result = await accountingService.getRevenueFromRingba({
       dateFrom: dateFrom?.trim() || undefined,
