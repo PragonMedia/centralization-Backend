@@ -1,61 +1,52 @@
 /**
- * Accounting controller – revenue/insights from Ringba for frontend display.
- * Uses companies collection for accountID + apiToken. No auth required (temporary).
+ * Accounting controller – revenue from Ringba for frontend display.
+ * Fetches all companies from DB and gets each one's revenue from Ringba. No auth required (temporary).
  */
 const Company = require("../models/companyModel");
 const accountingService = require("../services/accountingService");
 
 /**
  * GET /api/v1/accounting/revenue
- * Fetches Ringba insights for a company. Company from DB: by accountID or companyName (query), else first company.
- * Query: accountID, companyName, reportStart, reportEnd (ISO).
+ * Fetches revenue for every company in the companies collection.
+ * Query: reportStart, reportEnd (ISO, optional – default report window used).
+ * Response: { success, companies: [ { companyName, revenue } ] }.
  */
 exports.getRevenue = async (req, res) => {
   try {
-    const { accountID, companyName, reportStart, reportEnd } = req.query;
+    const { reportStart, reportEnd } = req.query;
 
-    let company = null;
-    if (accountID && accountID.trim()) {
-      company = await Company.findOne({ accountID: accountID.trim() });
-    } else if (companyName && companyName.trim()) {
-      company = await Company.findOne({
-        companyName: new RegExp(`^${companyName.trim()}$`, "i"),
-      });
-    }
-    if (!company) {
-      company = await Company.findOne();
-    }
-
-    if (!company) {
+    const companies = await Company.find().lean();
+    if (!companies.length) {
       return res.status(200).json({
         success: false,
         message:
-          "No company found. Add a document to the companies collection (run node seedCompanies.js or create via API).",
-        revenue: null,
+          "No companies found. Add documents to the companies collection (run node seedCompanies.js or create via API).",
+        companies: [],
       });
     }
 
-    const result = await accountingService.getRevenueFromRingba({
-      accountID: company.accountID,
-      apiToken: company.apiToken,
-      reportStart: reportStart?.trim() || undefined,
-      reportEnd: reportEnd?.trim() || undefined,
-    });
+    const companiesWithRevenue = [];
 
-    if (!result.success) {
-      return res.status(200).json({
-        success: false,
-        message: result.message,
-        revenue: null,
+    for (const company of companies) {
+      const result = await accountingService.getRevenueFromRingba({
+        accountID: company.accountID,
+        apiToken: company.apiToken,
+        reportStart: reportStart?.trim() || undefined,
+        reportEnd: reportEnd?.trim() || undefined,
+      });
+
+      const revenue =
+        result.success && result.revenue != null ? result.revenue : null;
+
+      companiesWithRevenue.push({
+        companyName: company.companyName,
+        revenue,
       });
     }
 
     return res.status(200).json({
       success: true,
-      records: result.records,
-      conversionAmount: result.conversionAmount,
-      revenue: result.revenue,
-      period: result.period,
+      companies: companiesWithRevenue,
     });
   } catch (err) {
     console.error("Accounting getRevenue error:", err);
