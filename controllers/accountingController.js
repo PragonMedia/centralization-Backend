@@ -52,10 +52,10 @@ exports.getRevenue = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      records: result.records,
+      conversionAmount: result.conversionAmount,
       revenue: result.revenue,
       period: result.period,
-      report: result.report,
-      records: result.records,
     });
   } catch (err) {
     console.error("Accounting getRevenue error:", err);

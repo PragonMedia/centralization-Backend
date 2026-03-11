@@ -94,18 +94,26 @@ async function getRevenueFromRingba(options = {}) {
     });
 
     const report = response.data?.report;
-    const records = report?.records || [];
+    const allRecords = report?.records || [];
 
-    // Derive a simple revenue aggregate from records (e.g. total conversionAmount or profitGross from rollups)
-    const totalRow = records.find((r) => r.campaignName === "total" || r.buyer === "total");
+    // Rollup/total row is the last record when generateRollups is true
+    const totalRow =
+      allRecords.length > 0
+        ? allRecords[allRecords.length - 1]
+        : null;
+    const recordsOnly = totalRow ? [totalRow] : [];
+
+    const conversionAmountRaw = totalRow?.conversionAmount ?? null;
     const revenue =
-      totalRow?.conversionAmount ?? totalRow?.profitGross ?? totalRow?.payoutAmount ?? null;
+      typeof conversionAmountRaw === "number"
+        ? conversionAmountRaw
+        : parseFloat(conversionAmountRaw) || null;
 
     return {
       success: true,
-      report,
-      records,
-      revenue: typeof revenue === "number" ? revenue : parseFloat(revenue) || null,
+      records: recordsOnly,
+      conversionAmount: conversionAmountRaw != null ? String(conversionAmountRaw) : null,
+      revenue,
       period: { reportStart: body.reportStart, reportEnd: body.reportEnd },
     };
   } catch (error) {
