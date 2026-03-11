@@ -15,6 +15,7 @@ const authRouter = require("./routes/authRoutes");
 const sslRouter = require("./routes/sslRoutes");
 const ringbaRouter = require("./routes/ringbaRoutes");
 const trackRouter = require("./routes/trackRoutes");
+const accountingRouter = require("./routes/accountingRoutes");
 const { ringbaBodyParser } = require("./middleware/ringbaBodyParser");
 
 const app = express();
@@ -198,6 +199,7 @@ app.use("/api/v1/auth", authLimiter, authRouter);
 app.use("/api/v1/validate", cloakingRouter);
 app.use("/api/v1/ssl", sslRouter);
 app.use("/api/v1/track", trackRouter);
+app.use("/api/v1/accounting", accountingRouter);
 app.use("/api/v1", routeRouter); // ✅ example endpoint: POST /routes
 
 // 11. Global error handling middleware (must be last)
