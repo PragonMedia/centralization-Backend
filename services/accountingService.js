@@ -66,6 +66,77 @@ function buildInsightsBody(reportStart, reportEnd) {
 }
 
 /**
+ * Get 7 calendar days in UTC: today-6 through today (oldest first).
+ * Each element is { date (Date at 00:00 UTC), dayLabel: "MM/DD/YYYY", isToday: boolean }.
+ */
+function getLastSevenDaysUTC() {
+  const now = new Date();
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+  const out = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(todayUTC);
+    d.setUTCDate(d.getUTCDate() - i);
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    const day = d.getUTCDate();
+    const dayLabel = `${String(m + 1).padStart(2, "0")}/${String(day).padStart(2, "0")}/${y}`;
+    const isToday = i === 0;
+    out.push({ date: d, dayLabel, isToday });
+  }
+  return out;
+}
+
+/**
+ * Ringba report day = 4:00 AM UTC on that date through 3:59:59.999 UTC next day.
+ */
+function getRingbaDayWindow(utcDate) {
+  const y = utcDate.getUTCFullYear();
+  const m = utcDate.getUTCMonth();
+  const d = utcDate.getUTCDate();
+  const reportStart = new Date(Date.UTC(y, m, d, 4, 0, 0, 0));
+  const reportEnd = new Date(Date.UTC(y, m, d + 1, 3, 59, 59, 999));
+  return {
+    reportStart: reportStart.toISOString().replace(/\.\d{3}Z$/, "Z"),
+    reportEnd: reportEnd.toISOString().replace(/\.\d{3}Z$/, "Z"),
+  };
+}
+
+/**
+ * Fetch revenue for the last 7 days (today-6 through today). Only completed days get Ringba data; today gets revenue "".
+ * @param {Object} options - { accountID, apiToken, baseUrl? }
+ * @returns {Promise<{ success: boolean, revenueByDay?: Array<{ day: string, revenue: number|"" }>, message?: string }>}
+ */
+async function getRevenueWeekFromRingba(options = {}) {
+  const { accountID, apiToken, baseUrl } = options;
+  if (!accountID || !apiToken) {
+    return {
+      success: false,
+      message: "Missing accountID or apiToken.",
+    };
+  }
+  const days = getLastSevenDaysUTC();
+  const revenueByDay = [];
+  for (const { date, dayLabel, isToday } of days) {
+    if (isToday) {
+      revenueByDay.push({ day: dayLabel, revenue: "" });
+      continue;
+    }
+    const { reportStart, reportEnd } = getRingbaDayWindow(date);
+    const result = await getRevenueFromRingba({
+      accountID,
+      apiToken,
+      reportStart,
+      reportEnd,
+      baseUrl,
+    });
+    const revenue =
+      result.success && result.revenue != null ? result.revenue : "";
+    revenueByDay.push({ day: dayLabel, revenue });
+  }
+  return { success: true, revenueByDay };
+}
+
+/**
  * Fetch insights (revenue/call data) from Ringba.
  * Uses accountID + apiToken (e.g. from companies collection).
  * @param {Object} options - { accountID, apiToken, reportStart?, reportEnd?, baseUrl? }
@@ -130,6 +201,7 @@ async function getRevenueFromRingba(options = {}) {
 
 module.exports = {
   getRevenueFromRingba,
+  getRevenueWeekFromRingba,
   getDefaultReportWindow,
   buildInsightsBody,
 };
