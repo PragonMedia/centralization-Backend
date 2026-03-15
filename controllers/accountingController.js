@@ -4,14 +4,33 @@
  */
 const Company = require("../models/companyModel");
 const accountingService = require("../services/accountingService");
+const RINGBA_CONFIG = require("../config/ringbaApi");
 
 /**
- * GET /api/v1/accounting/revenue
- * Fetches revenue for every company: last 7 days (today-6 through today). Today's revenue is "" (day still running).
+ * POST /api/v1/accounting/revenue
+ * Body: { start: "YYYY-MM-DD", end: "YYYY-MM-DD" } (UTC dates; inclusive range).
+ * Fetches revenue for every company for each day in range. Today (UTC) gets revenue "".
  * Response: { success, companies: [ { companyName, revenue: [ { day: "MM/DD/YYYY", revenue: number|"" } ] } ] }.
  */
 exports.getRevenue = async (req, res) => {
   try {
+    const { start, end } = req.body || {};
+    const startStr = typeof start === "string" ? start.trim() : "";
+    const endStr = typeof end === "string" ? end.trim() : "";
+    if (!startStr || !endStr) {
+      return res.status(400).json({
+        success: false,
+        error: "Request body must include start and end dates (e.g. { \"start\": \"2026-03-08\", \"end\": \"2026-03-14\" }).",
+      });
+    }
+    const daysInRange = accountingService.getDaysInRangeUTC(startStr, endStr);
+    if (!daysInRange || daysInRange.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid date range. Use start and end as YYYY-MM-DD with end >= start.",
+      });
+    }
+
     const companies = await Company.find().lean();
     if (!companies.length) {
       return res.status(200).json({
@@ -25,9 +44,12 @@ exports.getRevenue = async (req, res) => {
     const companiesWithRevenue = [];
 
     for (const company of companies) {
-      const result = await accountingService.getRevenueWeekFromRingba({
+      const apiToken = (company.apiToken && company.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "";
+      const result = await accountingService.getRevenueRangeFromRingba({
         accountID: company.accountID,
-        apiToken: company.apiToken,
+        apiToken,
+        start: startStr,
+        end: endStr,
       });
 
       const revenue =
