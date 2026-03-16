@@ -41,6 +41,16 @@ exports.getRevenue = async (req, res) => {
       });
     }
 
+    // Build buyer index from all companies (normalized companyName -> Ringba account)
+    const buyersIndex = companies
+      .filter((c) => c.companyName && c.accountID)
+      .map((c) => ({
+        companyName: c.companyName,
+        accountID: c.accountID,
+        apiToken: (c.apiToken && c.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "",
+        normalizedName: accountingService.normalizeBuyerName(c.companyName),
+      }));
+
     const companiesWithRevenue = [];
 
     for (const company of companies) {
@@ -50,6 +60,7 @@ exports.getRevenue = async (req, res) => {
         apiToken,
         start: startStr,
         end: endStr,
+        buyersIndex,
       });
 
       const revenue =

@@ -67,6 +67,39 @@ function buildInsightsBody(reportStart, reportEnd) {
 }
 
 /**
+ * Build insights request body for buyer accounts (e.g. DigiPeak).
+ * groupBy campaignName, payout-focused columns; rollup last record has payoutAmount.
+ */
+function buildInsightsBodyBuyer(reportStart, reportEnd) {
+  const { reportStart: start, reportEnd: end } = reportStart && reportEnd
+    ? { reportStart, reportEnd }
+    : getDefaultReportWindow();
+  return {
+    reportStart: start,
+    reportEnd: end,
+    groupByColumns: [{ column: "campaignName", displayName: "Campaign" }],
+    valueColumns: [
+      { column: "callCount", aggregateFunction: null },
+      { column: "completedCalls", aggregateFunction: null },
+      { column: "endedCalls", aggregateFunction: null },
+      { column: "payoutCount", aggregateFunction: null },
+      { column: "duplicateCalls", aggregateFunction: null },
+      { column: "payoutPerCall", aggregateFunction: null },
+      { column: "payoutAmount", aggregateFunction: null },
+      { column: "callLengthInSeconds", aggregateFunction: null },
+      { column: "avgHandleTime", aggregateFunction: null },
+    ],
+    orderByColumns: [{ column: "callCount", direction: "desc" }],
+    formatTimespans: true,
+    formatPercentages: true,
+    generateRollups: true,
+    maxResultsPerGroup: 1000,
+    filters: [],
+    formatTimeZone: "America/New_York",
+  };
+}
+
+/**
  * Get 7 calendar days in UTC: today-6 through today (oldest first).
  * Each element is { date (Date at 00:00 UTC), dayLabel: "MM/DD/YYYY", isToday: boolean }.
  */
@@ -137,6 +170,15 @@ function getRingbaDayWindow(utcDate) {
 }
 
 /**
+ * Normalize buyer name for matching: lowercase and remove spaces.
+ * e.g. "Digi Peak" / "DIGIPEAK" / "digi peak" -> "digipeak".
+ */
+function normalizeBuyerName(name) {
+  if (!name || typeof name !== "string") return "";
+  return name.toLowerCase().replace(/\s+/g, "");
+}
+
+/**
  * Fetch revenue for the last 7 days (today-6 through today). Only completed days get Ringba data; today gets revenue "".
  * @param {Object} options - { accountID, apiToken, baseUrl? }
  * @returns {Promise<{ success: boolean, revenueByDay?: Array<{ day: string, revenue: number|"" }>, message?: string }>}
@@ -174,11 +216,12 @@ async function getRevenueWeekFromRingba(options = {}) {
 
 /**
  * Fetch revenue for a date range (start through end inclusive). Today (UTC) gets revenue "" and records [].
- * @param {Object} options - { accountID, apiToken, start: "YYYY-MM-DD", end: "YYYY-MM-DD", baseUrl? }
- * @returns {Promise<{ success: boolean, revenueByDay?: Array<{ day: string, revenue: number|"", records: Array<{ buyer, conversionAmount }> }>, message?: string }>}
+ * @param {Object} options - { accountID, apiToken, start: "YYYY-MM-DD", end: "YYYY-MM-DD", baseUrl?, buyersIndex? }
+ * buyersIndex: optional array of { accountID, apiToken, normalizedName } for buyer Ringba accounts (to compare buyerConversionAmount).
+ * @returns {Promise<{ success: boolean, revenueByDay?: Array<{ day: string, revenue: number|"", records: Array<{ buyer, conversionAmount, buyerConversionAmount? }> }>, message?: string }>}
  */
 async function getRevenueRangeFromRingba(options = {}) {
-  const { accountID, apiToken, start, end, baseUrl } = options;
+  const { accountID, apiToken, start, end, baseUrl, buyersIndex } = options;
   if (!accountID || !apiToken) {
     return {
       success: false,
@@ -193,6 +236,7 @@ async function getRevenueRangeFromRingba(options = {}) {
     };
   }
   const revenueByDay = [];
+  const buyerDayCache = new Map();
   for (const { date, dayLabel, isToday } of days) {
     if (isToday) {
       revenueByDay.push({ day: dayLabel, revenue: "", records: [] });
@@ -212,7 +256,52 @@ async function getRevenueRangeFromRingba(options = {}) {
     const revenue =
       result.success && result.revenue != null ? result.revenue : "";
     const records = result.success && Array.isArray(result.records) ? result.records : [];
-    revenueByDay.push({ day: dayLabel, revenue, records });
+
+    let enrichedRecords = records;
+
+    if (Array.isArray(records) && records.length > 0 && Array.isArray(buyersIndex) && buyersIndex.length > 0) {
+      enrichedRecords = [];
+      for (const r of records) {
+        const normalizedBuyer = normalizeBuyerName(r.buyer);
+        if (!normalizedBuyer) {
+          enrichedRecords.push(r);
+          continue;
+        }
+
+        const buyerCompany = buyersIndex.find(
+          (b) => b.normalizedName === normalizedBuyer && b.accountID !== accountID
+        );
+
+        if (!buyerCompany) {
+          enrichedRecords.push(r);
+          continue;
+        }
+
+        const cacheKey = `${buyerCompany.accountID}:${dayLabel}`;
+        let buyerRevenue = buyerDayCache.get(cacheKey);
+
+        if (buyerRevenue === undefined) {
+          const buyerResult = await getRevenueFromRingba({
+            accountID: buyerCompany.accountID,
+            apiToken: buyerCompany.apiToken,
+            reportStart,
+            reportEnd,
+            baseUrl,
+            useBuyerPayload: true,
+          });
+          buyerRevenue =
+            buyerResult.success && buyerResult.revenue != null ? String(buyerResult.revenue) : null;
+          buyerDayCache.set(cacheKey, buyerRevenue);
+        }
+
+        enrichedRecords.push({
+          ...r,
+          buyerConversionAmount: buyerRevenue,
+        });
+      }
+    }
+
+    revenueByDay.push({ day: dayLabel, revenue, records: enrichedRecords });
   }
   return { success: true, revenueByDay };
 }
@@ -220,11 +309,12 @@ async function getRevenueRangeFromRingba(options = {}) {
 /**
  * Fetch insights (revenue/call data) from Ringba.
  * Uses accountID + apiToken (e.g. from companies collection).
- * @param {Object} options - { accountID, apiToken, reportStart?, reportEnd?, baseUrl? }
+ * @param {Object} options - { accountID, apiToken, reportStart?, reportEnd?, baseUrl?, useBuyerPayload? }
+ * useBuyerPayload: true = use buyer-style body (groupBy campaignName, payoutAmount); for buyer Ringba accounts.
  * @returns {Promise<{ success: boolean, report?: object, records?: array, revenue?: number, message?: string }>}
  */
 async function getRevenueFromRingba(options = {}) {
-  const { accountID, apiToken, reportStart, reportEnd, baseUrl } = options;
+  const { accountID, apiToken, reportStart, reportEnd, baseUrl, useBuyerPayload } = options;
 
   const tokenToUse = (apiToken && String(apiToken).trim()) || "";
   if (!accountID || !tokenToUse) {
@@ -238,7 +328,9 @@ async function getRevenueFromRingba(options = {}) {
   const url = `${baseUrl || DEFAULT_BASE_URL}/v2/${accountID}/insights`;
 
   try {
-    const body = buildInsightsBody(reportStart, reportEnd);
+    const body = useBuyerPayload
+      ? buildInsightsBodyBuyer(reportStart, reportEnd)
+      : buildInsightsBody(reportStart, reportEnd);
     // Ringba Insights: send single object (matches working script: axios.post(url, body, ...))
     const authHeader =
       process.env.RINGBA_AUTH_SCHEME === "Bearer"
@@ -273,7 +365,13 @@ async function getRevenueFromRingba(options = {}) {
       allRecords.length > 0
         ? allRecords[allRecords.length - 1]
         : null;
-    const conversionAmountRaw = totalRow?.conversionAmount ?? null;
+    // Primary metric: conversionAmount (our PGNM view). Fallback: payoutAmount (buyer view / sample response).
+    const conversionAmountRaw =
+      totalRow?.conversionAmount != null
+        ? totalRow.conversionAmount
+        : totalRow?.payoutAmount != null
+        ? totalRow.payoutAmount
+        : null;
     const revenue =
       typeof conversionAmountRaw === "number"
         ? conversionAmountRaw
@@ -315,6 +413,7 @@ module.exports = {
   getRevenueFromRingba,
   getRevenueWeekFromRingba,
   getRevenueRangeFromRingba,
+  normalizeBuyerName,
   getDaysInRangeUTC,
   getDefaultReportWindow,
   buildInsightsBody,
