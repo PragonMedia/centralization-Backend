@@ -9,13 +9,22 @@ const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const ROKU_CONFIG = require("../config/roku");
-const DATAZAPP_CONFIG = require("../config/datazapp");
 
-/** Trigger DataZapp when Ringba sends a valid (non-empty) ip. No longer based on event_group_id. */
+/** Trigger Audience Acuity identity lookup when Ringba sends a valid (non-empty) ip. */
 function hasValidIp(conversion) {
   const ip = conversion.ip ?? conversion.IP ?? "";
   return typeof ip === "string" && ip.trim().length > 0;
 }
+
+// Audience Acuity (Realink 2.0) identity lookup config.
+// Uses AA_KEY_ID + timestamp + md5(timestamp + AA_SECRET) auth.
+const AA_ORIGIN = (process.env.AA_ORIGIN || "https://api.audienceacuity.com").trim();
+const AA_KEY_ID = (process.env.AA_KEY_ID || "").trim();
+const AA_SECRET = (process.env.AA_SECRET || "").trim();
+const AA_TEMPLATE = process.env.AA_TEMPLATE ? Number(process.env.AA_TEMPLATE) : 6323591;
+// Optional: point to your local Audience Acuity / Realink 2.0 proxy:
+// e.g. http://localhost:3000 where proxy exposes POST /identities/byPhone?clean=1
+const AA_PROXY_ORIGIN = (process.env.AA_PROXY_ORIGIN || "").trim();
 
 /** 1-hour dedupe: do not send the same caller to Roku more than once per hour. */
 const RECENT_CALLERS_TTL_MS = 60 * 60 * 1000;
@@ -157,63 +166,235 @@ function normalizeName(raw) {
 }
 
 /**
- * DataZapp Reverse Phone Append API - get caller data by phone (unhashed).
- * Returns firstName, lastName, email, city, state, zip, country for Roku user_data.
- * Missing or empty fields from DataZapp are returned as null; we still send to Roku with whatever we have.
- * On API error or no match, returns null (we then send to Roku with phone only, same as event_id 1).
- * @param {Object} conversion - Ringba conversion (phone/caller_phone etc.)
- * @returns {Promise<{ email?, firstName?, lastName?, city?, state?, zip?, country? }|null>}
+ * Normalize raw phone for Audience Acuity:
+ * - take the last 10 digits always
  */
-async function getCallerDataFromDataZapp(conversion) {
+function normalizePhoneForAudienceAcuity(rawPhone) {
+  if (rawPhone == null || typeof rawPhone !== "string") return "";
+  const digits = rawPhone.replace(/\D/g, "");
+  if (digits.length < 10) return "";
+  return digits.slice(-10);
+}
+
+function normalizeGenderForRoku(rawGender) {
+  if (rawGender == null || typeof rawGender !== "string") return null;
+  const s = rawGender.trim().toLowerCase();
+  if (!s) return null;
+  if (s === "m" || s === "male") return "male";
+  if (s === "f" || s === "female") return "female";
+  return "unknown";
+}
+
+function normalizeDateOfBirthForRoku(rawDob) {
+  if (rawDob == null || typeof rawDob !== "string") return null;
+  const s = rawDob.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  return s;
+}
+
+/**
+ * Audience Acuity (Realink 2.0) identity lookup - get caller data by phone.
+ * Triggered only when Ringba provides a valid non-empty ip.
+ *
+ * On API error or no match, returns null (we then send to Roku with phone only).
+ * @param {Object} conversion - Ringba conversion (phone/caller_phone etc.)
+ * @returns {Promise<{
+ *   email: string|null,
+ *   firstName: string|null,
+ *   lastName: string|null,
+ *   gender: string|null,
+ *   dateOfBirth: string|null,
+ *   city: string|null,
+ *   state: string|null,
+ *   zip: string|null,
+ *   ipAddress: string|null,
+ *   aGA: string|null,
+ *   aID: string|null,
+ *   aGI: string|null,
+ * }|null>}
+ */
+async function getCallerDataFromAudienceAcuity(conversion, audit = {}) {
   const rawPhone = getRawPhoneForLookup(conversion);
   if (!rawPhone) {
-    console.warn("📋 DataZapp: no phone on conversion, skipping lookup");
+    console.warn("📋 AudienceAcuity: no phone on conversion, skipping lookup");
     return null;
   }
 
-  const apiUrl = DATAZAPP_CONFIG.API_URL;
-  const apiKey = DATAZAPP_CONFIG.API_KEY;
-  if (!apiUrl || !apiKey) {
-    console.warn("📋 DataZapp: API URL or key not set, skipping lookup");
+  const phoneForAA = normalizePhoneForAudienceAcuity(rawPhone);
+  if (!phoneForAA) {
+    console.warn("📋 AudienceAcuity: phone is not at least 10 digits, skipping lookup", { phone: rawPhone });
+    return null;
+  }
+
+  audit.source = "audienceacuity_direct";
+
+  if (!AA_ORIGIN || !AA_KEY_ID || !AA_SECRET) {
+    audit.reason = "missing_env_AA_KEY_ID_AA_SECRET";
+    console.warn("📋 AudienceAcuity: missing AA_KEY_ID/AA_SECRET (skipping lookup)");
     return null;
   }
 
   try {
-    const requestBody = {
-      ApiKey: apiKey,
-      AppendModule: DATAZAPP_CONFIG.APPEND_MODULE,
-      Data: [{ Phone: rawPhone }],
-    };
-    const response = await axios.post(apiUrl, requestBody, {
-      headers: { "Content-Type": "application/json" },
+    const requestBody = { inputs: [phoneForAA], template: AA_TEMPLATE };
+
+    const now = Date.now().toString(36);
+    const hash = crypto.createHash("md5").update(`${now}${AA_SECRET}`, "utf8").digest("hex");
+    const authHeader = `Bearer ${AA_KEY_ID}${now}${hash}`;
+
+    const url = `${AA_ORIGIN}/v2/identities/byPhone`;
+    const response = await axios.post(url, requestBody, {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: authHeader,
+      },
       timeout: 10000,
     });
 
-    const dataArray = response.data?.ResponseDetail?.Data;
-    const firstRecord = Array.isArray(dataArray) ? dataArray[0] : undefined;
+    audit.requestedAt = new Date().toISOString();
+    audit.httpStatus = response?.status;
 
-    if (!firstRecord) {
-      console.warn("📋 DataZapp: no record in response (empty Data or no match)", { phone: rawPhone });
+    const data = response.data;
+    const results = data?.results ?? data?.[0]?.results ?? null;
+    const identity = Array.isArray(results?.[0]?.identities) ? results[0].identities[0] : null;
+    if (!identity) {
+      audit.reason = "no_identity_match";
+      console.warn("📋 AudienceAcuity: no identity match", { phone: phoneForAA });
       return null;
     }
-    if (firstRecord.Matched === false) {
-      console.warn("📋 DataZapp: phone not matched", { phone: rawPhone });
-      return null;
-    }
 
-    const str = (v) => (v != null && typeof v === "string" && v.trim() ? v.trim() : null);
-    return {
-      email: str(firstRecord.Email),
-      firstName: str(firstRecord.FirstName),
-      lastName: str(firstRecord.LastName),
-      city: str(firstRecord.City),
-      state: str(firstRecord.State),
-      zip: str(firstRecord.Zip ?? firstRecord.ZipCode),
-      country: str(firstRecord.Country),
+    // Handle both raw AA identity shapes and the "cleaned" identity shape you tested.
+    // Raw can be either:
+    // - structured: { firstName, lastName, gender, birthDate, city, state, zip, ips, devices, emails: [{email:..}] }
+    // - simplified: { name, address, phones: [...], emails: ["a@b.com", ...] }
+    const emailFromEmails = () => {
+      const emails = identity?.emails;
+      if (!Array.isArray(emails) || emails.length === 0) return null;
+      const first = emails[0];
+      if (first == null) return null;
+      if (typeof first === "string") return first;
+      if (typeof first === "object" && typeof first.email === "string") return first.email;
+      return null;
     };
+
+    const email =
+      identity?.email ??
+      emailFromEmails() ??
+      (typeof identity?.email === "string" ? identity.email : null);
+
+    let firstName = identity?.firstName ?? null;
+    let lastName = identity?.lastName ?? null;
+
+    // If AA didn't provide split names, derive from identity.name
+    if ((!firstName || !lastName) && typeof identity?.name === "string" && identity.name.trim()) {
+      const parts = identity.name.trim().split(/\s+/).filter(Boolean);
+      if (parts.length > 0) {
+        firstName = parts[0] || null;
+        const rest = parts.slice(1).join(" ").trim();
+        lastName = rest || null;
+      }
+    }
+
+    // Prefer top-level identity fields, then fall back to nested identity.data fields
+    // to match the external clean proxy behavior.
+    const rawGender = identity?.gender ?? identity?.data?.gender ?? null;
+    const rawDob = identity?.dateOfBirth ?? identity?.birthDate ?? identity?.data?.birthDate ?? null;
+    const gender = normalizeGenderForRoku(rawGender);
+    const dateOfBirth = normalizeDateOfBirthForRoku(rawDob);
+
+    let city = identity?.city ?? null;
+    let state = identity?.state ?? null;
+    let zip = identity?.zip ?? null;
+
+    // If AA provided a full address but not split geo fields, parse from address string:
+    // Example: "1532 Brown St, Middletown OH 45044"
+    if ((!city || !state || !zip) && typeof identity?.address === "string" && identity.address.trim()) {
+      const addr = identity.address.trim();
+      // Grab: ", <city> <STATE> <zip>"
+      const m = addr.match(/,\s*([^,]+?)\s+([A-Za-z]{2})\s+(\d{5})(?:-\d{4})?/);
+      if (m) {
+        city = m[1];
+        state = m[2].toUpperCase();
+        zip = m[3];
+      }
+    }
+
+    const ipAddress =
+      identity?.ipAddress ??
+      (Array.isArray(identity?.ips) && identity.ips.length > 0 ? identity.ips[0]?.ip ?? null : null) ??
+      (Array.isArray(identity?.emails) && identity.emails.length > 0
+        ? (typeof identity.emails[0] === "object" ? identity.emails[0]?.ip ?? null : null)
+        : null);
+
+    let aGA = null;
+    let aID = null;
+    let aGI = null;
+    const devices =
+      (Array.isArray(identity?.devices) ? identity.devices : null) ??
+      (Array.isArray(identity?.data?.devices) ? identity.data.devices : null) ??
+      [];
+    if (devices.length > 0) {
+      for (const d of devices) {
+        const idType = String(d?.idType ?? "").trim().toUpperCase();
+        const deviceId = typeof d?.deviceId === "string" ? d.deviceId.trim() : "";
+        if (!deviceId) continue;
+
+        if (idType === "GAID" || idType === "ADID" || idType === "AAID") aGA = deviceId;
+        else if (idType === "IDFA") aID = deviceId;
+        else if (idType === "IDFV") aGI = deviceId;
+        if (aGA && aID && aGI) break;
+      }
+    } else if (identity?.mobileId) {
+      // If AA response does not include device idType, we don't know whether this is Apple vs Android.
+      // Send the same mobileId to all Roku mobile-id fields to avoid losing enrichment.
+      aGA = identity.mobileId;
+      aID = identity.mobileId;
+      aGI = identity.mobileId;
+    }
+
+    const toStr = (v) => (v != null && typeof v === "string" && v.trim() ? v.trim() : null);
+
+    const cleaned = {
+      email: toStr(email),
+      firstName: toStr(firstName),
+      lastName: toStr(lastName),
+      gender,
+      dateOfBirth,
+      city: toStr(city),
+      state: toStr(state),
+      zip: toStr(zip),
+      ipAddress: toStr(ipAddress),
+      aGA,
+      aID,
+      aGI,
+    };
+
+    // If AA returns the identity object but all fields are null, treat as no enrichment.
+    const hasAny =
+      cleaned.email ||
+      cleaned.firstName ||
+      cleaned.lastName ||
+      cleaned.gender ||
+      cleaned.dateOfBirth ||
+      cleaned.city ||
+      cleaned.state ||
+      cleaned.zip ||
+      cleaned.ipAddress ||
+      cleaned.aGA ||
+      cleaned.aID ||
+      cleaned.aGI;
+    audit.reason = hasAny ? "enriched" : "identity_fields_all_null";
+
+    return cleaned;
   } catch (error) {
+    const errStatus = error.response?.status;
     const msg = error.response?.data ? JSON.stringify(error.response.data) : error.message;
-    console.warn("📋 DataZapp API error (continuing to Roku with phone only):", msg);
+    audit.reason = "api_error";
+    audit.httpStatus = errStatus;
+    audit.errorMessage = typeof msg === "string" ? msg.slice(0, 500) : String(msg);
+    console.warn("📋 AudienceAcuity API error (continuing to Roku with phone only):", {
+      status: errStatus,
+      message: msg,
+    });
     return null;
   }
 }
@@ -235,7 +416,14 @@ function timestampMicrosToEpochSeconds(timestampMicros) {
  * event_group_id from Ringba (conversion or defaultEventGroupId fallback).
  * event_id from Ringba (pass-through, not hashed) for Roku deduplication.
  * event_time = server time (Date.now() → epoch seconds).
- * user_data: ph (hashed) always; em, fn, ln (hashed) when from DataZapp; ct, st, zp from DataZapp or Ringba (conversion.ct/st/zp), country (not hashed) when present.
+ * user_data:
+ *  - ph (hashed) always
+ *  - em, fn, ln (hashed) when available from Audience Acuity
+ *  - ge, db (hashed) when available from Audience Acuity
+ *  - ct, st, zp from Audience Acuity or Ringba (conversion.ct/st/zp)
+ *  - client_ip_address when available from Audience Acuity
+ *  - aGA/aID/aGI when available from Audience Acuity
+ *  - country (not hashed) always set to "US"
  */
 function buildRokuEvent(conversion, options = {}) {
   const eventGroupId =
@@ -273,7 +461,29 @@ function buildRokuEvent(conversion, options = {}) {
     const n = normalizeName(options.callerLastName.trim());
     if (n) userData.ln = sha256Hash(n);
   }
-  // City, state, zip: DataZapp first, then Ringba (ct, st, zp)
+
+  if (options.callerGender && typeof options.callerGender === "string" && options.callerGender.trim()) {
+    const g = options.callerGender.trim().toLowerCase();
+    userData.ge = sha256Hash(g);
+  }
+  if (options.callerDob && typeof options.callerDob === "string" && options.callerDob.trim()) {
+    userData.db = sha256Hash(options.callerDob.trim());
+  }
+
+  if (options.callerIpAddress && typeof options.callerIpAddress === "string" && options.callerIpAddress.trim()) {
+    userData.client_ip_address = options.callerIpAddress.trim();
+  }
+  if (options.callerAga && typeof options.callerAga === "string" && options.callerAga.trim()) {
+    userData.aGA = options.callerAga.trim();
+  }
+  if (options.callerAid && typeof options.callerAid === "string" && options.callerAid.trim()) {
+    userData.aID = options.callerAid.trim();
+  }
+  if (options.callerAgi && typeof options.callerAgi === "string" && options.callerAgi.trim()) {
+    userData.aGI = options.callerAgi.trim();
+  }
+
+  // City, state, zip: Audience Acuity first, then Ringba (ct, st, zp)
   const city =
     options.callerCity && typeof options.callerCity === "string" && options.callerCity.trim()
       ? options.callerCity.trim()
@@ -334,7 +544,7 @@ async function sendConversionsToRoku(conversions, options = {}) {
       appendRokuAudit({
         timestamp: new Date().toISOString(),
         receivedFromRingba: conversion,
-        dataZapp: { called: false, reason: "skipped (missing roku_api_key)" },
+        audienceAcuity: { called: false, reason: "skipped (missing roku_api_key)" },
         sentToRoku: null,
         result: { success: false, reason: "roku_api_key is required from Ringba" },
       });
@@ -347,18 +557,19 @@ async function sendConversionsToRoku(conversions, options = {}) {
       appendRokuAudit({
         timestamp: new Date().toISOString(),
         receivedFromRingba: conversion,
-        dataZapp: { called: false, reason: "skipped (duplicate within 1h, did not call DataZapp)" },
+        audienceAcuity: { called: false, reason: "skipped (duplicate within 1h, did not call AudienceAcuity)" },
         sentToRoku: null,
         result: { success: false, reason: "duplicate within 1 hour" },
       });
       continue;
     }
 
-    const useDataZapp = hasValidIp(conversion);
+    const useAudienceAcuity = hasValidIp(conversion);
 
     let callerData = null;
-    if (useDataZapp) {
-      callerData = await getCallerDataFromDataZapp(conversion);
+    const audienceAudit = {};
+    if (useAudienceAcuity) {
+      callerData = await getCallerDataFromAudienceAcuity(conversion, audienceAudit);
     }
 
     let payload;
@@ -369,10 +580,15 @@ async function sendConversionsToRoku(conversions, options = {}) {
           callerEmail: callerData.email,
           callerFirstName: callerData.firstName,
           callerLastName: callerData.lastName,
+          callerGender: callerData.gender,
+          callerDob: callerData.dateOfBirth,
           callerCity: callerData.city,
           callerState: callerData.state,
           callerZip: callerData.zip,
-          callerCountry: callerData.country,
+          callerIpAddress: callerData.ipAddress,
+          callerAga: callerData.aGA,
+          callerAid: callerData.aID,
+          callerAgi: callerData.aGI,
         }),
       });
       const response = await axios.post(url, payload, {
@@ -390,7 +606,7 @@ async function sendConversionsToRoku(conversions, options = {}) {
       appendRokuAudit({
         timestamp: new Date().toISOString(),
         receivedFromRingba: conversion,
-        dataZapp: { called: useDataZapp, data: callerData },
+        audienceAcuity: { called: useAudienceAcuity, ...audienceAudit, data: callerData },
         sentToRoku: payload,
         result: { success: true, response: response.data },
       });
@@ -407,7 +623,7 @@ async function sendConversionsToRoku(conversions, options = {}) {
       appendRokuAudit({
         timestamp: new Date().toISOString(),
         receivedFromRingba: conversion,
-        dataZapp: { called: useDataZapp, data: callerData },
+        audienceAcuity: { called: useAudienceAcuity, ...audienceAudit, data: callerData },
         sentToRoku: payload !== undefined ? payload : null,
         result: { success: false, reason: errMsg },
       });
@@ -417,9 +633,9 @@ async function sendConversionsToRoku(conversions, options = {}) {
   return results;
 }
 
-/** @deprecated Use getCallerDataFromDataZapp; kept for backward compatibility */
+/** @deprecated Kept for backward compatibility; now uses Audience Acuity. */
 async function getCallerEmailFromExternalApi(conversion) {
-  const data = await getCallerDataFromDataZapp(conversion);
+  const data = await getCallerDataFromAudienceAcuity(conversion);
   return data?.email ?? null;
 }
 
@@ -429,7 +645,7 @@ module.exports = {
   normalizePhone,
   normalizeEmail,
   normalizeName,
-  getCallerDataFromDataZapp,
+  getCallerDataFromAudienceAcuity,
   getCallerEmailFromExternalApi,
   timestampMicrosToEpochSeconds,
 };

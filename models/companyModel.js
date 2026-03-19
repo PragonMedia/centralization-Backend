@@ -19,8 +19,9 @@ const companySchema = new mongoose.Schema(
     },
     apiToken: {
       type: String,
-      required: true,
+      required: false,
       trim: true,
+      default: "",
     },
   },
   { timestamps: true }

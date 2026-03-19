@@ -1,11 +1,7 @@
-const fs = require("fs");
 const path = require("path");
 const cm360Service = require("../services/cm360Service");
 const rokuConversionService = require("../services/rokuConversionService");
 const slackService = require("../services/slackService");
-
-const CATCH_ROKU_DIR = path.join(__dirname, "..", "logs");
-const CATCH_ROKU_PREFIX = "catchRoku";
 
 function hasDclid(conversion) {
   return (
@@ -296,29 +292,7 @@ async function handleRokuConversion(req, res) {
       }
     }
 
-    // Debug: write one JSON file per Roku conversion
-    try {
-      if (!fs.existsSync(CATCH_ROKU_DIR)) {
-        fs.mkdirSync(CATCH_ROKU_DIR, { recursive: true });
-      }
-      const ts = Date.now();
-      console.log("📁 catchRoku: writing to", CATCH_ROKU_DIR, "count:", rokuResults.length);
-      rokuResults.forEach((result, i) => {
-        const filename = `${CATCH_ROKU_PREFIX}-${ts}-${i}.json`;
-        const filepath = path.join(CATCH_ROKU_DIR, filename);
-        const payload = {
-          receivedFromRingba: result.conversion,
-          sentToRoku: result.sentToRoku ?? null,
-          rokuResponse: result.response ?? null,
-          rokuError: result.error ?? null,
-          skipped: result.skipped === true,
-        };
-        fs.writeFileSync(filepath, JSON.stringify(payload, null, 2), "utf8");
-        console.log("📁 catchRoku: wrote", filename);
-      });
-    } catch (writeErr) {
-      console.error("⚠️ catchRoku write failed:", writeErr.message, "path:", CATCH_ROKU_DIR, "code:", writeErr.code);
-    }
+    // Debug file logging to disk removed to avoid overloading server.
 
     const hasRokuErrors = rokuResults.some((r) => r.error != null);
     const responsePayload = {

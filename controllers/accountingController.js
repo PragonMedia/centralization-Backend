@@ -111,7 +111,8 @@ exports.listCompanies = async (req, res) => {
 
 /**
  * POST /api/v1/accounting/companies
- * Create a new company. Body: { companyName, accountID, apiToken }.
+ * Create a new company. Body: { companyName, accountID }. apiToken is optional;
+ * when omitted, the server auto-inserts RINGBA_API_KEY / RINGBA_API_TOKEN from env (single shared API for all buyers).
  */
 exports.createCompany = async (req, res) => {
   try {
@@ -132,10 +133,16 @@ exports.createCompany = async (req, res) => {
         error: "accountID is required and must be a non-empty string.",
       });
     }
-    if (!apiToken || typeof apiToken !== "string" || !apiToken.trim()) {
+    // Use body apiToken if provided and non-empty; otherwise use single shared API key from env
+    const apiTokenToStore =
+      apiToken && typeof apiToken === "string" && apiToken.trim()
+        ? apiToken.trim()
+        : (RINGBA_CONFIG.API_KEY || "");
+    if (!apiTokenToStore) {
       return res.status(400).json({
         success: false,
-        error: "apiToken is required and must be a non-empty string.",
+        error:
+          "apiToken was not provided and server has no RINGBA_API_KEY or RINGBA_API_TOKEN set. Set one in .env to auto-insert for new buyers.",
       });
     }
     const existing = await Company.findOne({
@@ -150,7 +157,7 @@ exports.createCompany = async (req, res) => {
     const company = await Company.create({
       companyName: companyName.trim(),
       accountID: accountID.trim(),
-      apiToken: apiToken.trim(),
+      apiToken: apiTokenToStore,
     });
     return res.status(201).json({
       success: true,
