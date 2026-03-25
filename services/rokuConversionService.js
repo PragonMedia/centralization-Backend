@@ -694,6 +694,8 @@ async function sendConversionsToRoku(conversions, options = {}) {
     try {
       const built = buildRokuEvent(conversion, {
         defaultEventGroupId: options.defaultEventGroupId,
+        // Prefer AA-enriched IP; otherwise use Ringba IP directly.
+        callerIpAddress: callerData?.ipAddress ?? ringbaLog.ip,
         ...(callerData && {
           callerEmail: callerData.email,
           callerFirstName: callerData.firstName,
@@ -703,7 +705,6 @@ async function sendConversionsToRoku(conversions, options = {}) {
           callerCity: callerData.city,
           callerState: callerData.state,
           callerZip: callerData.zip,
-          callerIpAddress: callerData.ipAddress,
           callerAga: callerData.aGA,
           callerAid: callerData.aID,
           callerAgi: callerData.aGI,
