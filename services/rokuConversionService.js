@@ -655,10 +655,7 @@ async function sendConversionsToRoku(conversions, options = {}) {
       continue;
     }
 
-    // Desired behavior:
-    // - If Ringba provides an IP, do NOT call AA (send Roku directly, using Ringba IP).
-    // - If Ringba does NOT provide an IP, call AA to enrich (and use AA IP if available).
-    const useAudienceAcuity = !hasValidIp(conversion);
+    const useAudienceAcuity = hasValidIp(conversion);
 
     let callerData = null;
     const audienceAudit = {};
