@@ -9,6 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const ROKU_CONFIG = require("../config/roku");
+const RokuLog = require("../models/rokuLogModel");
 
 /** Trigger Audience Acuity identity lookup when Ringba sends a valid (non-empty) ip. */
 function hasValidIp(conversion) {
@@ -263,23 +264,49 @@ async function getCallerDataFromAudienceAcuity(conversion, audit = {}) {
     }
 
     // Handle both raw AA identity shapes and the "cleaned" identity shape you tested.
-    // Raw can be either:
-    // - structured: { firstName, lastName, gender, birthDate, city, state, zip, ips, devices, emails: [{email:..}] }
-    // - simplified: { name, address, phones: [...], emails: ["a@b.com", ...] }
-    const emailFromEmails = () => {
+    // Email selection rules (per your request):
+    // 1) prefer emails with optIn: true
+    // 2) within that set, choose the one with highest rankOrder
+    // 3) if none have optIn, choose highest rankOrder from the full list
+    // 4) ties: choose the first one in the array
+    const selectBestEmail = () => {
       const emails = identity?.emails;
       if (!Array.isArray(emails) || emails.length === 0) return null;
-      const first = emails[0];
-      if (first == null) return null;
-      if (typeof first === "string") return first;
-      if (typeof first === "object" && typeof first.email === "string") return first.email;
-      return null;
+
+      // Keep original order by using a single pass that only updates on "strictly better".
+      const hasOptInTrue = emails.some((e) => typeof e === "object" && e != null && e.optIn === true);
+      let bestRank = -Infinity;
+      let bestEmail = null;
+
+      for (const entry of emails) {
+        // AA sometimes returns emails as strings; we can't infer optIn/rankOrder then.
+        if (typeof entry === "string") {
+          if (hasOptInTrue) continue; // only consider explicit opt-in emails when available
+          // If we only have plain strings, pick the first one (preserve order).
+          if (bestEmail == null) bestEmail = entry;
+          continue;
+        }
+
+        if (!entry || typeof entry !== "object") continue;
+        const emailStr = typeof entry.email === "string" ? entry.email : null;
+        if (!emailStr) continue;
+
+        if (hasOptInTrue && entry.optIn !== true) continue;
+
+        const rank = Number(entry.rankOrder);
+        const safeRank = Number.isFinite(rank) ? rank : -Infinity;
+
+        if (safeRank > bestRank) {
+          bestRank = safeRank;
+          bestEmail = emailStr;
+        }
+        // If safeRank === bestRank, we intentionally keep the first one (no update).
+      }
+
+      return bestEmail;
     };
 
-    const email =
-      identity?.email ??
-      emailFromEmails() ??
-      (typeof identity?.email === "string" ? identity.email : null);
+    const email = selectBestEmail() ?? (typeof identity?.email === "string" ? identity.email : null);
 
     let firstName = identity?.firstName ?? null;
     let lastName = identity?.lastName ?? null;
@@ -318,12 +345,35 @@ async function getCallerDataFromAudienceAcuity(conversion, audit = {}) {
       }
     }
 
-    const ipAddress =
-      identity?.ipAddress ??
-      (Array.isArray(identity?.ips) && identity.ips.length > 0 ? identity.ips[0]?.ip ?? null : null) ??
-      (Array.isArray(identity?.emails) && identity.emails.length > 0
-        ? (typeof identity.emails[0] === "object" ? identity.emails[0]?.ip ?? null : null)
-        : null);
+    // IP selection rules (per your request):
+    // - identity.ips is an array of { ip, intensity }
+    // - choose the highest intensity
+    // - ties: choose the first one
+    const selectBestIp = () => {
+      const ips = identity?.ips;
+      if (!Array.isArray(ips) || ips.length === 0) return null;
+
+      let bestIntensity = -Infinity;
+      let bestIp = null;
+
+      for (const entry of ips) {
+        const ipStr = entry && typeof entry === "object" ? entry.ip : null;
+        if (typeof ipStr !== "string" || !ipStr.trim()) continue;
+
+        const intensity = entry && typeof entry === "object" ? Number(entry.intensity) : NaN;
+        const safeIntensity = Number.isFinite(intensity) ? intensity : -Infinity;
+
+        if (safeIntensity > bestIntensity) {
+          bestIntensity = safeIntensity;
+          bestIp = ipStr;
+        }
+        // If safeIntensity === bestIntensity, keep first (no update).
+      }
+
+      return bestIp;
+    };
+
+    const ipAddress = selectBestIp() ?? identity?.ipAddress ?? null;
 
     let aGA = null;
     let aID = null;
@@ -424,6 +474,8 @@ function timestampMicrosToEpochSeconds(timestampMicros) {
  *  - client_ip_address when available from Audience Acuity
  *  - aGA/aID/aGI when available from Audience Acuity
  *  - country (not hashed) always set to "US"
+ *
+ * @returns {{ payload: {event_group_id: string, events: Array}, plainUserData: Object }}
  */
 function buildRokuEvent(conversion, options = {}) {
   const eventGroupId =
@@ -444,43 +496,70 @@ function buildRokuEvent(conversion, options = {}) {
   const normalizedPhone = normalizePhone(rawPhone);
   const hashedPhone = normalizedPhone ? sha256Hash(normalizedPhone) : "";
 
+  // Hashed user_data sent to Roku
   const userData = {
     is_hashed: true,
     ph: hashedPhone,
   };
 
+  // Un-hashed user_data values we derived from AA/Ringba (for debugging)
+  const plainUserData = {
+    is_hashed: false,
+    ph: normalizedPhone,
+  };
+
   if (options.callerEmail && typeof options.callerEmail === "string" && options.callerEmail.trim()) {
     const normalizedEm = normalizeEmail(options.callerEmail.trim());
-    if (normalizedEm) userData.em = sha256Hash(normalizedEm);
+    if (normalizedEm) {
+      userData.em = sha256Hash(normalizedEm);
+      plainUserData.em = normalizedEm;
+    }
   }
   if (options.callerFirstName && typeof options.callerFirstName === "string" && options.callerFirstName.trim()) {
     const n = normalizeName(options.callerFirstName.trim());
-    if (n) userData.fn = sha256Hash(n);
+    if (n) {
+      userData.fn = sha256Hash(n);
+      plainUserData.fn = n;
+    }
   }
   if (options.callerLastName && typeof options.callerLastName === "string" && options.callerLastName.trim()) {
     const n = normalizeName(options.callerLastName.trim());
-    if (n) userData.ln = sha256Hash(n);
+    if (n) {
+      userData.ln = sha256Hash(n);
+      plainUserData.ln = n;
+    }
   }
 
   if (options.callerGender && typeof options.callerGender === "string" && options.callerGender.trim()) {
     const g = options.callerGender.trim().toLowerCase();
     userData.ge = sha256Hash(g);
+    plainUserData.ge = g;
   }
   if (options.callerDob && typeof options.callerDob === "string" && options.callerDob.trim()) {
-    userData.db = sha256Hash(options.callerDob.trim());
+    const dobPlain = options.callerDob.trim();
+    userData.db = sha256Hash(dobPlain);
+    plainUserData.db = dobPlain;
   }
 
   if (options.callerIpAddress && typeof options.callerIpAddress === "string" && options.callerIpAddress.trim()) {
-    userData.client_ip_address = options.callerIpAddress.trim();
+    const ip = options.callerIpAddress.trim();
+    userData.client_ip_address = ip;
+    plainUserData.client_ip_address = ip;
   }
   if (options.callerAga && typeof options.callerAga === "string" && options.callerAga.trim()) {
-    userData.aGA = options.callerAga.trim();
+    const v = options.callerAga.trim();
+    userData.aGA = v;
+    plainUserData.aGA = v;
   }
   if (options.callerAid && typeof options.callerAid === "string" && options.callerAid.trim()) {
-    userData.aID = options.callerAid.trim();
+    const v = options.callerAid.trim();
+    userData.aID = v;
+    plainUserData.aID = v;
   }
   if (options.callerAgi && typeof options.callerAgi === "string" && options.callerAgi.trim()) {
-    userData.aGI = options.callerAgi.trim();
+    const v = options.callerAgi.trim();
+    userData.aGI = v;
+    plainUserData.aGI = v;
   }
 
   // City, state, zip: Audience Acuity first, then Ringba (ct, st, zp)
@@ -488,21 +567,31 @@ function buildRokuEvent(conversion, options = {}) {
     options.callerCity && typeof options.callerCity === "string" && options.callerCity.trim()
       ? options.callerCity.trim()
       : (conversion.ct ?? conversion.city ?? "").trim();
-  if (city) userData.ct = city;
+  if (city) {
+    userData.ct = city;
+    plainUserData.ct = city;
+  }
 
   const state =
     options.callerState && typeof options.callerState === "string" && options.callerState.trim()
       ? options.callerState.trim()
       : (conversion.st ?? conversion.state ?? "").trim();
-  if (state) userData.st = state;
+  if (state) {
+    userData.st = state;
+    plainUserData.st = state;
+  }
 
   const zip =
     options.callerZip != null && String(options.callerZip).trim()
       ? String(options.callerZip).trim()
       : (conversion.zp ?? conversion.zip ?? "").trim();
-  if (zip) userData.zp = zip;
+  if (zip) {
+    userData.zp = zip;
+    plainUserData.zp = zip;
+  }
 
   userData.country = "US";
+  plainUserData.country = "US";
 
   const eventTime = Math.floor(Date.now() / 1000);
 
@@ -517,10 +606,12 @@ function buildRokuEvent(conversion, options = {}) {
     eventPayload.event_id = eventId;
   }
 
-  return {
+  const payload = {
     event_group_id: eventGroupId,
     events: [eventPayload],
   };
+
+  return { payload, plainUserData };
 }
 
 /**
@@ -572,9 +663,36 @@ async function sendConversionsToRoku(conversions, options = {}) {
       callerData = await getCallerDataFromAudienceAcuity(conversion, audienceAudit);
     }
 
+    const aaSuccess = !!(
+      callerData &&
+      (callerData.email ||
+        callerData.firstName ||
+        callerData.lastName ||
+        callerData.gender ||
+        callerData.dateOfBirth ||
+        callerData.city ||
+        callerData.state ||
+        callerData.zip ||
+        callerData.ipAddress ||
+        callerData.aGA ||
+        callerData.aID ||
+        callerData.aGI)
+    );
+
+    const ringbaLog = {
+      phone: getRawPhoneForLookup(conversion) || null,
+      ip: typeof conversion?.ip === "string" ? conversion.ip.trim() : typeof conversion?.IP === "string" ? conversion.IP.trim() : null,
+      city: (conversion.ct ?? conversion.city ?? "").trim() || null,
+      state: (conversion.st ?? conversion.state ?? "").trim() || null,
+      zip: (conversion.zp ?? conversion.zip ?? "").trim() || null,
+      event_group_id: (conversion.event_group_id ?? conversion.eventGroupId ?? conversion.event ?? conversion.Event ?? "").trim() || null,
+      event_id: (conversion.event_id ?? conversion.eventId ?? "").trim() || null,
+    };
+
     let payload;
+    let plainUserData;
     try {
-      payload = buildRokuEvent(conversion, {
+      const built = buildRokuEvent(conversion, {
         defaultEventGroupId: options.defaultEventGroupId,
         ...(callerData && {
           callerEmail: callerData.email,
@@ -591,6 +709,8 @@ async function sendConversionsToRoku(conversions, options = {}) {
           callerAgi: callerData.aGI,
         }),
       });
+      payload = built.payload;
+      plainUserData = built.plainUserData;
       const response = await axios.post(url, payload, {
         headers: {
           Accept: "application/json",
@@ -598,6 +718,21 @@ async function sendConversionsToRoku(conversions, options = {}) {
           Authorization: `Bearer ${apiKey.trim()}`,
         },
       });
+
+      try {
+        await RokuLog.create({
+          aaCalled: useAudienceAcuity,
+          aaSuccess,
+          ringba: ringbaLog,
+          plainUserData: plainUserData ?? {},
+          rokuRequest: payload ?? {},
+          rokuResponse: response?.data ?? null,
+          rokuError: null,
+        });
+      } catch (logErr) {
+        console.warn("⚠️ RokuLogs write failed:", logErr?.message || logErr);
+      }
+
       results.push({ conversion, sentToRoku: payload, response: response.data });
       console.log("✅ Roku CAPI success:", {
         event_group_id: payload.event_group_id,
@@ -615,6 +750,21 @@ async function sendConversionsToRoku(conversions, options = {}) {
         ? JSON.stringify(error.response.data)
         : error.message;
       console.error("❌ Roku CAPI error:", errMsg);
+
+      try {
+        await RokuLog.create({
+          aaCalled: useAudienceAcuity,
+          aaSuccess,
+          ringba: ringbaLog,
+          plainUserData: plainUserData ?? {},
+          rokuRequest: payload ?? {},
+          rokuResponse: null,
+          rokuError: errMsg,
+        });
+      } catch (logErr) {
+        console.warn("⚠️ RokuLogs write failed:", logErr?.message || logErr);
+      }
+
       results.push({
         conversion,
         ...(payload !== undefined && { sentToRoku: payload }),
