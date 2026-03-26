@@ -655,7 +655,8 @@ async function sendConversionsToRoku(conversions, options = {}) {
       continue;
     }
 
-    const useAudienceAcuity = hasValidIp(conversion);
+    // Call AA only when Ringba conversion does NOT include an IP.
+    const useAudienceAcuity = !hasValidIp(conversion);
 
     let callerData = null;
     const audienceAudit = {};
