@@ -70,6 +70,8 @@ exports.getRevenue = async (req, res) => {
 
       companiesWithRevenue.push({
         companyName: company.companyName,
+        accountID: company.accountID,
+        net: company.net || "",
         revenue,
       });
     }
@@ -94,7 +96,7 @@ exports.getRevenue = async (req, res) => {
 exports.listCompanies = async (req, res) => {
   try {
     const companies = await Company.find()
-      .select("companyName accountID createdAt")
+      .select("companyName accountID net createdAt")
       .lean();
     return res.status(200).json({
       success: true,
@@ -116,7 +118,7 @@ exports.listCompanies = async (req, res) => {
  */
 exports.createCompany = async (req, res) => {
   try {
-    const { companyName, accountID, apiToken } = req.body || {};
+    const { companyName, accountID, apiToken, net } = req.body || {};
     if (
       !companyName ||
       typeof companyName !== "string" ||
@@ -158,6 +160,7 @@ exports.createCompany = async (req, res) => {
       companyName: companyName.trim(),
       accountID: accountID.trim(),
       apiToken: apiTokenToStore,
+      net: typeof net === "string" ? net.trim() : "",
     });
     return res.status(201).json({
       success: true,
@@ -165,6 +168,7 @@ exports.createCompany = async (req, res) => {
         _id: company._id,
         companyName: company.companyName,
         accountID: company.accountID,
+        net: company.net || "",
         createdAt: company.createdAt,
       },
     });
@@ -185,12 +189,12 @@ exports.createCompany = async (req, res) => {
 
 /**
  * PUT /api/v1/accounting/companies/:accountID
- * Update a company by accountID. Body: { companyName?, accountID?, apiToken? } (all optional; only provided fields are updated).
+ * Update a company by accountID. Body: { companyName?, accountID?, apiToken?, net? } (all optional; only provided fields are updated).
  */
 exports.updateCompany = async (req, res) => {
   try {
     const { accountID: paramAccountID } = req.params;
-    const { companyName, accountID, apiToken } = req.body || {};
+    const { companyName, accountID, apiToken, net } = req.body || {};
     if (!paramAccountID || !paramAccountID.trim()) {
       return res.status(400).json({
         success: false,
@@ -244,6 +248,15 @@ exports.updateCompany = async (req, res) => {
       }
       updates.apiToken = apiToken.trim();
     }
+    if (net !== undefined) {
+      if (typeof net !== "string") {
+        return res.status(400).json({
+          success: false,
+          error: "net must be a string.",
+        });
+      }
+      updates.net = net.trim();
+    }
     if (Object.keys(updates).length === 0) {
       return res.status(200).json({
         success: true,
@@ -251,6 +264,7 @@ exports.updateCompany = async (req, res) => {
           _id: company._id,
           companyName: company.companyName,
           accountID: company.accountID,
+          net: company.net || "",
           createdAt: company.createdAt,
           updatedAt: company.updatedAt,
         },
@@ -264,6 +278,7 @@ exports.updateCompany = async (req, res) => {
         _id: company._id,
         companyName: company.companyName,
         accountID: company.accountID,
+        net: company.net || "",
         createdAt: company.createdAt,
         updatedAt: company.updatedAt,
       },
@@ -312,6 +327,7 @@ exports.deleteCompany = async (req, res) => {
         _id: company._id,
         companyName: company.companyName,
         accountID: company.accountID,
+        net: company.net || "",
       },
     });
   } catch (err) {

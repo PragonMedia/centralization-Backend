@@ -23,6 +23,12 @@ const companySchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    net: {
+      type: String,
+      required: false,
+      trim: true,
+      default: "",
+    },
   },
   { timestamps: true }
 );
