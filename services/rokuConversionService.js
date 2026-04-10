@@ -10,6 +10,9 @@ const path = require("path");
 const axios = require("axios");
 const ROKU_CONFIG = require("../config/roku");
 const RokuLog = require("../models/rokuLogModel");
+const ROKU_REQUEST_TIMEOUT_MS = Number(process.env.ROKU_REQUEST_TIMEOUT_MS || 8000);
+const ROKU_NETWORK_RETRY_COUNT = Number(process.env.ROKU_NETWORK_RETRY_COUNT || 2);
+const ROKU_RETRY_BASE_DELAY_MS = Number(process.env.ROKU_RETRY_BASE_DELAY_MS || 500);
 
 /** Trigger Audience Acuity identity lookup when Ringba sends a valid (non-empty) ip. */
 function hasValidIp(conversion) {
@@ -44,6 +47,78 @@ function appendRokuAudit(entry) {
   } catch (e) {
     console.warn("⚠️ Roku audit write failed:", e.message);
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableRokuNetworkError(error) {
+  if (!error || error.response) return false;
+
+  const code = String(error.code || "").toUpperCase();
+  const retryableCodes = new Set([
+    "ECONNRESET",
+    "ECONNABORTED",
+    "ETIMEDOUT",
+    "ESOCKETTIMEDOUT",
+    "EPIPE",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+  ]);
+  if (retryableCodes.has(code)) return true;
+
+  const msg = String(error.message || "").toLowerCase();
+  return (
+    msg.includes("client network socket disconnected before secure tls connection was established") ||
+    msg.includes("socket hang up") ||
+    msg.includes("tls") ||
+    msg.includes("network error")
+  );
+}
+
+async function postToRokuWithRetry(url, payload, apiKey) {
+  let attempt = 0;
+  let lastError = null;
+
+  while (attempt <= ROKU_NETWORK_RETRY_COUNT) {
+    try {
+      const response = await axios.post(url, payload, {
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey.trim()}`,
+        },
+        timeout: ROKU_REQUEST_TIMEOUT_MS,
+      });
+      return response;
+    } catch (error) {
+      lastError = error;
+      const shouldRetry = isRetryableRokuNetworkError(error) && attempt < ROKU_NETWORK_RETRY_COUNT;
+      if (!shouldRetry) break;
+
+      const delayMs = ROKU_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+      console.warn("⚠️ Roku CAPI transient network/TLS error. Retrying...", {
+        attempt: attempt + 1,
+        nextDelayMs: delayMs,
+        code: error.code,
+        message: error.message,
+      });
+      await sleep(delayMs);
+      attempt += 1;
+    }
+  }
+
+  if (isRetryableRokuNetworkError(lastError)) {
+    const wrapped = new Error(
+      `[network_tls_error] Roku transport failed after ${ROKU_NETWORK_RETRY_COUNT + 1} attempt(s): ${lastError.message}`
+    );
+    wrapped.code = lastError.code;
+    wrapped.cause = lastError;
+    throw wrapped;
+  }
+
+  throw lastError;
 }
 
 /**
@@ -154,6 +229,7 @@ function getRawPhoneForLookup(conversion) {
     conversion.caller_phone ??
     conversion.callerPhone ??
     conversion.callerPhoneNumber ??
+    conversion.phone_home ??
     "";
   return typeof raw === "string" ? raw.trim() : "";
 }
@@ -713,13 +789,7 @@ async function sendConversionsToRoku(conversions, options = {}) {
       });
       payload = built.payload;
       plainUserData = built.plainUserData;
-      const response = await axios.post(url, payload, {
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey.trim()}`,
-        },
-      });
+      const response = await postToRokuWithRetry(url, payload, apiKey);
 
       try {
         await RokuLog.create({

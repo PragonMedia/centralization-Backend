@@ -18,6 +18,9 @@ router.post("/conversion", ringbaController.handleRingbaConversion);
 // POST /ringba/roku/conversion — Roku CAPI only
 router.post("/roku/conversion", ringbaController.handleRokuConversion);
 
+// POST /ringba/jade/conversion — AA enrichment + Jade inbound API
+router.post("/jade/conversion", ringbaController.handleJadeConversion);
+
 module.exports = router;
 
 

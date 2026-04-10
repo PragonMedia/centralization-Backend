@@ -1,6 +1,7 @@
 const path = require("path");
 const cm360Service = require("../services/cm360Service");
 const rokuConversionService = require("../services/rokuConversionService");
+const jadeLeadService = require("../services/jadeLeadService");
 const slackService = require("../services/slackService");
 
 function hasDclid(conversion) {
@@ -288,7 +289,11 @@ async function handleRokuConversion(req, res) {
           result.conversion?.callerPhone ??
           "unknown";
         const errMsg = typeof result.error === "string" ? result.error : JSON.stringify(result.error);
-        await slackService.sendSlackMessage(`ROKU: conversion fail for caller : ${phone}. Err message : ${errMsg}`);
+        const isNetworkTlsError = errMsg.includes("[network_tls_error]");
+        const errorTag = isNetworkTlsError ? "network_tls_error" : "roku_error";
+        await slackService.sendSlackMessage(
+          `ROKU [${errorTag}]: conversion fail for caller : ${phone}. Err message : ${errMsg}`
+        );
       }
     }
 
@@ -313,7 +318,40 @@ async function handleRokuConversion(req, res) {
   }
 }
 
+/**
+ * Handle Jade-only conversion request
+ * POST /ringba/jade/conversion
+ * Accepts either { conversions: [ {...} ] } or a flat object.
+ * No validation gate: incomplete rows are skipped silently.
+ */
+async function handleJadeConversion(req, res) {
+  try {
+    if (!req.body) {
+      return res.status(400).json({
+        success: false,
+        error: "Request body is missing or could not be parsed. Ensure Content-Type is application/json",
+      });
+    }
+
+    let conversions = [];
+    if (Array.isArray(req.body?.conversions)) {
+      conversions = req.body.conversions;
+    } else if (req.body && typeof req.body === "object" && !Array.isArray(req.body)) {
+      conversions = [req.body];
+    }
+
+    const summary = await jadeLeadService.sendConversionsToJade(conversions);
+    return res.status(200).json({
+      success: summary.failed === 0,
+      jadeSummary: summary,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
 module.exports = {
   handleRingbaConversion,
   handleRokuConversion,
+  handleJadeConversion,
 };

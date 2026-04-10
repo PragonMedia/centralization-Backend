@@ -36,9 +36,19 @@ function ringbaBodyParser(req, res, next) {
     return next();
   }
 
-  // Log raw body from Ringba (first 2KB) so we can see exactly what was sent
   const RAW_BODY_LOG_LIMIT = 2048;
-  console.log("📋 Ringba raw body (first", Math.min(str.length, RAW_BODY_LOG_LIMIT), "chars):", str.substring(0, RAW_BODY_LOG_LIMIT) + (str.length > RAW_BODY_LOG_LIMIT ? "..." : ""));
+  // Jade webhook: avoid logging request bodies (high volume / PII). Other Ringba paths keep debug logs.
+  const isJadeWebhook =
+    (req.originalUrl && req.originalUrl.includes("/jade/")) ||
+    (req.path && req.path.includes("/jade/"));
+  if (!isJadeWebhook) {
+    console.log(
+      "📋 Ringba raw body (first",
+      Math.min(str.length, RAW_BODY_LOG_LIMIT),
+      "chars):",
+      str.substring(0, RAW_BODY_LOG_LIMIT) + (str.length > RAW_BODY_LOG_LIMIT ? "..." : "")
+    );
+  }
 
   try {
     req.body = JSON.parse(str);
@@ -47,7 +57,14 @@ function ringbaBodyParser(req, res, next) {
     if (str.includes('"conversions"') && e instanceof SyntaxError) {
       try {
         const repaired = repairMalformedRingbaJson(str);
-        console.log("📋 Ringba repaired body (first", Math.min(repaired.length, RAW_BODY_LOG_LIMIT), "chars):", repaired.substring(0, RAW_BODY_LOG_LIMIT) + (repaired.length > RAW_BODY_LOG_LIMIT ? "..." : ""));
+        if (!isJadeWebhook) {
+          console.log(
+            "📋 Ringba repaired body (first",
+            Math.min(repaired.length, RAW_BODY_LOG_LIMIT),
+            "chars):",
+            repaired.substring(0, RAW_BODY_LOG_LIMIT) + (repaired.length > RAW_BODY_LOG_LIMIT ? "..." : "")
+          );
+        }
         req.body = JSON.parse(repaired);
         console.log(
           "🔧 Ringba: Repaired malformed JSON (conversions string -> array) and parsed successfully"
