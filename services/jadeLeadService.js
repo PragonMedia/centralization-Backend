@@ -15,6 +15,7 @@ const JADE_NETWORK_RETRY_COUNT = Number(
 const JADE_RETRY_BASE_DELAY_MS = Number(
   process.env.JADE_RETRY_BASE_DELAY_MS || process.env.JAKE_RETRY_BASE_DELAY_MS || 500
 );
+const JADE_BEARER_TOKEN = (process.env.JADE_BEARER_TOKEN || process.env.JAKE_BEARER_TOKEN || "").trim();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -103,11 +104,15 @@ function shouldLogOutbound() {
 async function postJadeLeadWithRetry(payload) {
   let attempt = 0;
   let lastError = null;
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  if (JADE_BEARER_TOKEN) {
+    headers.Authorization = `Bearer ${JADE_BEARER_TOKEN}`;
+  }
 
   while (attempt <= JADE_NETWORK_RETRY_COUNT) {
     try {
       return await axios.post(JADE_INBOUND_URL, payload, {
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers,
         timeout: JADE_REQUEST_TIMEOUT_MS,
       });
     } catch (error) {
@@ -133,11 +138,10 @@ async function postJadeLeadWithRetry(payload) {
 }
 
 async function sendConversionsToJade(conversions) {
-  const summary = { received: 0, forwarded: 0, skipped: 0, failed: 0 };
+  const results = [];
 
   for (const conversion of conversions) {
-    summary.received += 1;
-
+    let payload = null;
     try {
       const rawPhone = getRawPhone(conversion);
       const phoneHome = normalizePhoneHome(rawPhone);
@@ -149,7 +153,7 @@ async function sendConversionsToJade(conversions) {
       const zipCode = normalizeZip(callerData?.zip);
       const age = calculateAgeFromDob(callerData?.dateOfBirth);
 
-      const payload = {
+      payload = {
         first_name: firstName,
         last_name: lastName,
         phone_home: phoneHome,
@@ -168,7 +172,11 @@ async function sendConversionsToJade(conversions) {
         !Number.isInteger(payload.age);
 
       if (missingRequired) {
-        summary.skipped += 1;
+        results.push({
+          success: false,
+          data: payload,
+          failureReason: "missing_required_fields",
+        });
         continue;
       }
 
@@ -176,14 +184,58 @@ async function sendConversionsToJade(conversions) {
         console.log("📤 Jade outbound POST", { url: JADE_INBOUND_URL, body: payload });
       }
 
-      await postJadeLeadWithRetry(payload);
-      summary.forwarded += 1;
-    } catch (_error) {
-      summary.failed += 1;
+      const jadeResponse = await postJadeLeadWithRetry(payload);
+      results.push({
+        success: true,
+        data: payload,
+        failureReason: null,
+        jadeResponse: {
+          status: jadeResponse?.status ?? null,
+          data: jadeResponse?.data ?? null,
+        },
+      });
+    } catch (error) {
+      const responseData = error?.response?.data;
+      const responseText =
+        responseData == null
+          ? null
+          : typeof responseData === "string"
+            ? responseData
+            : JSON.stringify(responseData);
+      results.push({
+        success: false,
+        data: payload,
+        failureReason: responseText
+          ? `${error?.message || "jade_send_failed"} | response: ${responseText}`
+          : error?.message || "jade_send_failed",
+        jadeResponse: {
+          status: error?.response?.status ?? null,
+          data: error?.response?.data ?? null,
+        },
+      });
     }
   }
 
-  return summary;
+  if (!Array.isArray(conversions) || conversions.length === 0) {
+    return {
+      success: false,
+      data: {
+        success: false,
+        data: null,
+        failureReason: "no_conversions_received",
+        jadeResponse: {
+          status: null,
+          data: null,
+        },
+      },
+    };
+  }
+
+  const overallSuccess = results.every((r) => r.success === true);
+  return {
+    success: overallSuccess,
+    data: results.length === 1 ? results[0] : results,
+  };
 }
 
 module.exports = {

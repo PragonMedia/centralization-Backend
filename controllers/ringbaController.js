@@ -342,8 +342,11 @@ async function handleJadeConversion(req, res) {
 
     const summary = await jadeLeadService.sendConversionsToJade(conversions);
     return res.status(200).json({
-      success: summary.failed === 0,
-      jadeSummary: summary,
+      success: summary.success === true,
+      jadeSummary: {
+        success: summary.success === true,
+        data: summary.data,
+      },
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
