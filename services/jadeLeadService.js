@@ -1,4 +1,6 @@
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 const { getCallerDataFromAudienceAcuity } = require("./rokuConversionService");
 
 const JADE_INBOUND_URL = (
@@ -16,9 +18,83 @@ const JADE_RETRY_BASE_DELAY_MS = Number(
   process.env.JADE_RETRY_BASE_DELAY_MS || process.env.JAKE_RETRY_BASE_DELAY_MS || 500
 );
 const JADE_BEARER_TOKEN = (process.env.JADE_BEARER_TOKEN || process.env.JAKE_BEARER_TOKEN || "").trim();
+const JADE_DEDUPE_TIMEZONE = (process.env.JADE_DEDUPE_TIMEZONE || "America/New_York").trim();
+const JADE_DEDUPE_FILE = path.join(__dirname, "..", "logs", "jade-daily-recent-callers.json");
+let jadeDedupeLock = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getEasternDayKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: JADE_DEDUPE_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const y = parts.find((p) => p.type === "year")?.value;
+  const m = parts.find((p) => p.type === "month")?.value;
+  const d = parts.find((p) => p.type === "day")?.value;
+  return y && m && d ? `${y}-${m}-${d}` : "unknown-day";
+}
+
+async function withJadeDedupLock(fn) {
+  const next = (jadeDedupeLock || Promise.resolve()).then(() => fn()).then(
+    (result) => {
+      jadeDedupeLock = null;
+      return result;
+    },
+    (error) => {
+      jadeDedupeLock = null;
+      throw error;
+    }
+  );
+  jadeDedupeLock = next;
+  return next;
+}
+
+async function readJadeDedupState() {
+  try {
+    const raw = await fs.promises.readFile(JADE_DEDUPE_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.warn("⚠️ Jade dedupe file read failed:", error.message);
+    }
+  }
+  return { dayKey: getEasternDayKey(), phones: [] };
+}
+
+async function writeJadeDedupState(state) {
+  const dir = path.dirname(JADE_DEDUPE_FILE);
+  await fs.promises.mkdir(dir, { recursive: true });
+  await fs.promises.writeFile(JADE_DEDUPE_FILE, JSON.stringify(state), "utf8");
+}
+
+async function isDuplicateTodayAndAdd(phoneHome) {
+  if (!phoneHome) return false;
+
+  return withJadeDedupLock(async () => {
+    const currentDayKey = getEasternDayKey();
+    const state = await readJadeDedupState();
+    const savedDayKey = typeof state?.dayKey === "string" ? state.dayKey : "";
+    const existingPhones = Array.isArray(state?.phones) ? state.phones : [];
+
+    // New ET day: drop prior list and start fresh.
+    const phonesForToday = savedDayKey === currentDayKey ? existingPhones : [];
+    const set = new Set(phonesForToday.map((p) => String(p || "").trim()).filter(Boolean));
+    if (set.has(phoneHome)) return true;
+
+    set.add(phoneHome);
+    await writeJadeDedupState({
+      dayKey: currentDayKey,
+      phones: Array.from(set),
+    });
+    return false;
+  });
 }
 
 function getRawPhone(conversion) {
@@ -145,6 +221,27 @@ async function sendConversionsToJade(conversions) {
     try {
       const rawPhone = getRawPhone(conversion);
       const phoneHome = normalizePhoneHome(rawPhone);
+      const duplicateToday = await isDuplicateTodayAndAdd(phoneHome);
+      if (duplicateToday) {
+        results.push({
+          success: false,
+          data: {
+            first_name: "",
+            last_name: "",
+            phone_home: phoneHome,
+            state: "",
+            zip_code: "",
+            subid: "paragon",
+            age: null,
+          },
+          failureReason: "duplicate_same_et_day",
+          jadeResponse: {
+            status: null,
+            data: null,
+          },
+        });
+        continue;
+      }
       const callerData = await getCallerDataFromAudienceAcuity(conversion);
 
       const firstName = typeof callerData?.firstName === "string" ? callerData.firstName.trim() : "";
