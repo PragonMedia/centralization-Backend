@@ -5,6 +5,22 @@
 const Company = require("../models/companyModel");
 const accountingService = require("../services/accountingService");
 const RINGBA_CONFIG = require("../config/ringbaApi");
+const SUPPORTED_PLATFORMS = ["ringba", "retriever"];
+
+exports.getRetrieverTestData = async (req, res) => {
+  try {
+    const payload = await accountingService.getRetrieverTestData({
+      accountID: typeof req.query?.accountID === "string" ? req.query.accountID.trim() : "",
+    });
+    return res.status(payload.success ? 200 : 400).json(payload);
+  } catch (err) {
+    console.error("Accounting getRetrieverTestData error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch Retriever test data.",
+    });
+  }
+};
 
 /**
  * POST /api/v1/accounting/revenue
@@ -41,12 +57,16 @@ exports.getRevenue = async (req, res) => {
       });
     }
 
-    // Build buyer index from all companies (normalized companyName -> Ringba account)
+    // Build buyer index from all companies (normalized companyName -> platform account)
     const buyersIndex = companies
-      .filter((c) => c.companyName && c.accountID)
+      .filter((c) => {
+        const platform = (typeof c.platform === "string" ? c.platform.trim().toLowerCase() : "") || "ringba";
+        return (platform === "ringba" || platform === "retriever") && c.companyName && c.accountID;
+      })
       .map((c) => ({
         companyName: c.companyName,
         accountID: c.accountID,
+        platform: (typeof c.platform === "string" ? c.platform.trim().toLowerCase() : "") || "ringba",
         apiToken: (c.apiToken && c.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "",
         normalizedName: accountingService.normalizeBuyerName(c.companyName),
       }));
@@ -54,14 +74,26 @@ exports.getRevenue = async (req, res) => {
     const companiesWithRevenue = [];
 
     for (const company of companies) {
+      const platform = (typeof company.platform === "string" ? company.platform.trim().toLowerCase() : "") || "ringba";
       const apiToken = (company.apiToken && company.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "";
-      const result = await accountingService.getRevenueRangeFromRingba({
-        accountID: company.accountID,
-        apiToken,
-        start: startStr,
-        end: endStr,
-        buyersIndex,
-      });
+      let result;
+      if (platform === "retriever") {
+        result = await accountingService.getRevenueRangeFromRetriever({
+          accountID: company.accountID,
+          apiKey: company.apiToken,
+          start: startStr,
+          end: endStr,
+        });
+      } else {
+        const isPGNMBase = accountingService.normalizeBuyerName(company.companyName) === "pgnm";
+        result = await accountingService.getRevenueRangeFromRingba({
+          accountID: company.accountID,
+          apiToken,
+          start: startStr,
+          end: endStr,
+          buyersIndex: isPGNMBase ? buyersIndex : [],
+        });
+      }
 
       const revenue =
         result.success && Array.isArray(result.revenueByDay)
@@ -72,6 +104,7 @@ exports.getRevenue = async (req, res) => {
         companyName: company.companyName,
         accountID: company.accountID,
         net: company.net || "",
+        platform,
         revenue,
       });
     }
@@ -96,7 +129,7 @@ exports.getRevenue = async (req, res) => {
 exports.listCompanies = async (req, res) => {
   try {
     const companies = await Company.find()
-      .select("companyName accountID net createdAt")
+      .select("companyName accountID net platform createdAt")
       .lean();
     return res.status(200).json({
       success: true,
@@ -118,7 +151,24 @@ exports.listCompanies = async (req, res) => {
  */
 exports.createCompany = async (req, res) => {
   try {
-    const { companyName, accountID, apiToken, net } = req.body || {};
+    const { companyName, accountID, apiToken, net, platform } = req.body || {};
+    let normalizedPlatform = "ringba";
+    if (platform !== undefined) {
+      if (typeof platform !== "string" || !platform.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "platform must be a non-empty string when provided.",
+        });
+      }
+      normalizedPlatform = platform.trim().toLowerCase();
+      if (!SUPPORTED_PLATFORMS.includes(normalizedPlatform)) {
+        return res.status(400).json({
+          success: false,
+          error: `platform must be one of: ${SUPPORTED_PLATFORMS.join(", ")}.`,
+        });
+      }
+    }
+
     if (
       !companyName ||
       typeof companyName !== "string" ||
@@ -161,6 +211,7 @@ exports.createCompany = async (req, res) => {
       accountID: accountID.trim(),
       apiToken: apiTokenToStore,
       net: typeof net === "string" ? net.trim() : "",
+      platform: normalizedPlatform,
     });
     return res.status(201).json({
       success: true,
@@ -169,6 +220,7 @@ exports.createCompany = async (req, res) => {
         companyName: company.companyName,
         accountID: company.accountID,
         net: company.net || "",
+        platform: company.platform || "ringba",
         createdAt: company.createdAt,
       },
     });
@@ -194,7 +246,7 @@ exports.createCompany = async (req, res) => {
 exports.updateCompany = async (req, res) => {
   try {
     const { accountID: paramAccountID } = req.params;
-    const { companyName, accountID, apiToken, net } = req.body || {};
+    const { companyName, accountID, apiToken, net, platform } = req.body || {};
     if (!paramAccountID || !paramAccountID.trim()) {
       return res.status(400).json({
         success: false,
@@ -257,6 +309,22 @@ exports.updateCompany = async (req, res) => {
       }
       updates.net = net.trim();
     }
+    if (platform !== undefined) {
+      if (typeof platform !== "string" || !platform.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "platform must be a non-empty string.",
+        });
+      }
+      const normalizedPlatform = platform.trim().toLowerCase();
+      if (!SUPPORTED_PLATFORMS.includes(normalizedPlatform)) {
+        return res.status(400).json({
+          success: false,
+          error: `platform must be one of: ${SUPPORTED_PLATFORMS.join(", ")}.`,
+        });
+      }
+      updates.platform = normalizedPlatform;
+    }
     if (Object.keys(updates).length === 0) {
       return res.status(200).json({
         success: true,
@@ -265,6 +333,7 @@ exports.updateCompany = async (req, res) => {
           companyName: company.companyName,
           accountID: company.accountID,
           net: company.net || "",
+          platform: company.platform || "ringba",
           createdAt: company.createdAt,
           updatedAt: company.updatedAt,
         },
@@ -279,6 +348,7 @@ exports.updateCompany = async (req, res) => {
         companyName: company.companyName,
         accountID: company.accountID,
         net: company.net || "",
+        platform: company.platform || "ringba",
         createdAt: company.createdAt,
         updatedAt: company.updatedAt,
       },
@@ -328,6 +398,7 @@ exports.deleteCompany = async (req, res) => {
         companyName: company.companyName,
         accountID: company.accountID,
         net: company.net || "",
+        platform: company.platform || "ringba",
       },
     });
   } catch (err) {

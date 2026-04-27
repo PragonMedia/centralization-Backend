@@ -10,6 +10,7 @@ const Company = require("./models/companyModel");
 const PGNM_COMPANY = {
   companyName: "PGNM",
   accountID: "RA417e311c6e8b47538624556e6e84298a",
+  platform: "ringba",
   apiToken:
     "09f0c9f0c033544593cea5409fad971c23237045bad4c7df5c0a6143571bc536a3c02566ee514421a7eaa335c3d3ce87a6b891ac64063ae5bc9aa9bd2bce8d40c843200d925d971d01002993adfaa76202e3726335c93bd6200ac084cc826e48dce6d965ed055392a67eb47d8588f5f9c73ac462",
 };
@@ -28,7 +29,13 @@ async function seed() {
       console.log("Company already exists for accountID:", PGNM_COMPANY.accountID);
       await Company.updateOne(
         { accountID: PGNM_COMPANY.accountID },
-        { $set: { companyName: PGNM_COMPANY.companyName, apiToken: PGNM_COMPANY.apiToken } }
+        {
+          $set: {
+            companyName: PGNM_COMPANY.companyName,
+            apiToken: PGNM_COMPANY.apiToken,
+            platform: PGNM_COMPANY.platform,
+          },
+        }
       );
       console.log("Updated company record.");
     } else {

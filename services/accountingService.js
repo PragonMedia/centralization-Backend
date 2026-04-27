@@ -6,6 +6,9 @@ const axios = require("axios");
 const RINGBA_API_CONFIG = require("../config/ringbaApi");
 
 const DEFAULT_BASE_URL = (RINGBA_API_CONFIG.BASE_URL || "https://api.ringba.com").replace(/\/$/, "");
+const RETREAVER_BASE_URL = (process.env.RETREAVER_API_BASE_URL || "https://api.retreaver.com").replace(/\/$/, "");
+const RETREAVER_API_KEY = (process.env.RETREAVER_API_KEY || "").trim();
+const RETREAVER_MAX_PAGES = Number(process.env.RETREAVER_MAX_PAGES || 50);
 
 /**
  * Default report window: today 4:00 AM UTC to tomorrow 3:59:59.999 UTC (matches Ringba dev console).
@@ -169,6 +172,38 @@ function getRingbaDayWindow(utcDate) {
   };
 }
 
+function toRetreaverDateTime(isoString) {
+  return String(isoString || "")
+    .replace(/\.\d{3}Z$/, "+00:00")
+    .replace(/Z$/, "+00:00");
+}
+
+function normalizeRetrieverBuyerLabel(value) {
+  if (value == null) return "";
+  const trimmed = String(value).trim();
+  return trimmed;
+}
+
+function getRetrieverBuyerLabel(call) {
+  const afidLabel = normalizeRetrieverBuyerLabel(call?.afid);
+  if (afidLabel) return afidLabel;
+
+  const affiliateIdLabel = normalizeRetrieverBuyerLabel(call?.affiliate_id);
+  if (affiliateIdLabel) return affiliateIdLabel;
+
+  const targetLabel = normalizeRetrieverBuyerLabel(
+    call?.target_id ?? call?.system_target_id
+  );
+  if (targetLabel) return targetLabel;
+
+  const campaignLabel = normalizeRetrieverBuyerLabel(
+    call?.campaign_id ?? call?.system_campaign_id
+  );
+  if (campaignLabel) return campaignLabel;
+
+  return "retriever";
+}
+
 /**
  * Normalize buyer name for matching: lowercase and remove spaces.
  * e.g. "Digi Peak" / "DIGIPEAK" / "digi peak" -> "digipeak".
@@ -176,6 +211,45 @@ function getRingbaDayWindow(utcDate) {
 function normalizeBuyerName(name) {
   if (!name || typeof name !== "string") return "";
   return name.toLowerCase().replace(/\s+/g, "");
+}
+
+async function getBuyerComparisonRevenueForDay(options = {}) {
+  const {
+    buyerCompany,
+    reportStart,
+    reportEnd,
+    ringbaBaseUrl,
+  } = options;
+
+  if (!buyerCompany || !buyerCompany.accountID) return null;
+  const platform =
+    (typeof buyerCompany.platform === "string"
+      ? buyerCompany.platform.trim().toLowerCase()
+      : "") || "ringba";
+
+  if (platform === "retriever") {
+    const retrieverResult = await getRevenueFromRetreaverDay({
+      accountID: buyerCompany.accountID,
+      apiKey: buyerCompany.apiToken,
+      reportStart,
+      reportEnd,
+    });
+    return retrieverResult.success && retrieverResult.revenue != null
+      ? String(retrieverResult.revenue)
+      : null;
+  }
+
+  const ringbaResult = await getRevenueFromRingba({
+    accountID: buyerCompany.accountID,
+    apiToken: buyerCompany.apiToken,
+    reportStart,
+    reportEnd,
+    baseUrl: ringbaBaseUrl,
+    useBuyerPayload: true,
+  });
+  return ringbaResult.success && ringbaResult.revenue != null
+    ? String(ringbaResult.revenue)
+    : null;
 }
 
 /**
@@ -281,16 +355,13 @@ async function getRevenueRangeFromRingba(options = {}) {
         let buyerRevenue = buyerDayCache.get(cacheKey);
 
         if (buyerRevenue === undefined) {
-          const buyerResult = await getRevenueFromRingba({
-            accountID: buyerCompany.accountID,
-            apiToken: buyerCompany.apiToken,
+          const buyerResult = await getBuyerComparisonRevenueForDay({
+            buyerCompany,
             reportStart,
             reportEnd,
-            baseUrl,
-            useBuyerPayload: true,
+            ringbaBaseUrl: baseUrl,
           });
-          buyerRevenue =
-            buyerResult.success && buyerResult.revenue != null ? String(buyerResult.revenue) : null;
+          buyerRevenue = buyerResult;
           buyerDayCache.set(cacheKey, buyerRevenue);
         }
 
@@ -304,6 +375,180 @@ async function getRevenueRangeFromRingba(options = {}) {
     revenueByDay.push({ day: dayLabel, revenue, records: enrichedRecords });
   }
   return { success: true, revenueByDay };
+}
+
+async function getRevenueFromRetreaverDay(options = {}) {
+  const {
+    accountID,
+    apiKey,
+    reportStart,
+    reportEnd,
+    baseUrl,
+  } = options;
+
+  const keyToUse = (apiKey && String(apiKey).trim()) || RETREAVER_API_KEY;
+  if (!accountID || !keyToUse) {
+    return {
+      success: false,
+      message: "Missing Retreaver accountID or apiKey.",
+    };
+  }
+
+  const endpoint = `${baseUrl || RETREAVER_BASE_URL}/calls.json`;
+  const createdAtStart = toRetreaverDateTime(reportStart);
+  const createdAtEnd = toRetreaverDateTime(reportEnd);
+
+  try {
+    const allCalls = [];
+    let page = 1;
+
+    while (page <= RETREAVER_MAX_PAGES) {
+      const response = await axios.get(endpoint, {
+        params: {
+          api_key: keyToUse,
+          company_id: accountID,
+          created_at_start: createdAtStart,
+          created_at_end: createdAtEnd,
+          sort_by: "created_at",
+          order: "asc",
+          page,
+        },
+        timeout: 20000,
+      });
+
+      const rows = Array.isArray(response.data) ? response.data : [];
+      if (rows.length === 0) break;
+      allCalls.push(...rows);
+      page += 1;
+    }
+
+    let revenue = 0;
+    const buyerTotals = new Map();
+    for (const row of allCalls) {
+      const call = row?.call && typeof row.call === "object" ? row.call : row;
+      const payoutRaw = call?.payout;
+      const payoutNum =
+        typeof payoutRaw === "number"
+          ? payoutRaw
+          : parseFloat(payoutRaw);
+      if (Number.isFinite(payoutNum)) revenue += payoutNum;
+      const buyer = getRetrieverBuyerLabel(call);
+      const existing = buyerTotals.get(buyer) || 0;
+      const increment = Number.isFinite(payoutNum) ? payoutNum : 0;
+      buyerTotals.set(buyer, existing + increment);
+    }
+
+    const records = Array.from(buyerTotals.entries()).map(([buyer, total]) => ({
+      buyer,
+      conversionAmount: Number(total.toFixed(4)).toString(),
+    }));
+
+    return {
+      success: true,
+      revenue: Number(revenue.toFixed(2)),
+      records,
+      period: { reportStart, reportEnd },
+    };
+  } catch (error) {
+    const status = error.response?.status;
+    const data = error.response?.data;
+    const message = data?.message ?? data?.error ?? error.message;
+    return {
+      success: false,
+      message: status === 401 ? "Invalid Retreaver API key." : `Retreaver API error: ${message}`,
+    };
+  }
+}
+
+/**
+ * Retriever adapter (live Retreaver-backed): mirrors Ringba revenue contract.
+ * @param {Object} options - { accountID, start: "YYYY-MM-DD", end: "YYYY-MM-DD", apiKey?, baseUrl? }
+ * @returns {Promise<{ success: boolean, revenueByDay?: Array<{ day: string, revenue: number|"", records: Array }>, message?: string }>}
+ */
+async function getRevenueRangeFromRetriever(options = {}) {
+  const { accountID, start, end, apiKey, baseUrl } = options;
+  if (!accountID) {
+    return {
+      success: false,
+      message: "Missing accountID.",
+    };
+  }
+  const days = getDaysInRangeUTC(start, end);
+  if (!days || days.length === 0) {
+    return {
+      success: false,
+      message: "Invalid or empty date range. Use start and end as YYYY-MM-DD with end >= start.",
+    };
+  }
+
+  const revenueByDay = [];
+  for (const { date, dayLabel, isToday } of days) {
+    if (isToday) {
+      revenueByDay.push({ day: dayLabel, revenue: "", records: [] });
+      continue;
+    }
+    const { reportStart, reportEnd } = getRingbaDayWindow(date);
+    const result = await getRevenueFromRetreaverDay({
+      accountID,
+      apiKey,
+      reportStart,
+      reportEnd,
+      baseUrl,
+    });
+
+    revenueByDay.push({
+      day: dayLabel,
+      revenue: result.success && result.revenue != null ? result.revenue : "",
+      records: result.success && Array.isArray(result.records) ? result.records : [],
+    });
+  }
+
+  return { success: true, revenueByDay };
+}
+
+/**
+ * Public payload for Retriever GET test endpoint (live Retreaver-backed).
+ */
+async function getRetrieverTestData(options = {}) {
+  const accountID = (options.accountID || process.env.RETREAVER_COMPANY_ID || "").trim();
+  if (!accountID) {
+    return {
+      success: false,
+      source: "retreaver_live",
+      error: "Missing accountID. Provide query ?accountID=... or set RETREAVER_COMPANY_ID.",
+    };
+  }
+  const now = new Date();
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+  todayUTC.setUTCDate(todayUTC.getUTCDate() - 1); // test last completed day
+  const dayLabel = `${String(todayUTC.getUTCMonth() + 1).padStart(2, "0")}/${String(todayUTC.getUTCDate()).padStart(2, "0")}/${todayUTC.getUTCFullYear()}`;
+  const { reportStart, reportEnd } = getRingbaDayWindow(todayUTC);
+  const result = await getRevenueFromRetreaverDay({
+    accountID,
+    reportStart,
+    reportEnd,
+    apiKey: options.apiKey,
+    baseUrl: options.baseUrl,
+  });
+  if (!result.success) {
+    return {
+      success: false,
+      source: "retreaver_live",
+      error: result.message,
+    };
+  }
+  return {
+    success: true,
+    source: "retreaver_live",
+    period: {
+      day: dayLabel,
+      generatedAt: now.toISOString(),
+      reportStart,
+      reportEnd,
+    },
+    records: result.records,
+    revenue: result.revenue,
+  };
 }
 
 /**
@@ -413,6 +658,9 @@ module.exports = {
   getRevenueFromRingba,
   getRevenueWeekFromRingba,
   getRevenueRangeFromRingba,
+  getRevenueRangeFromRetriever,
+  getRevenueFromRetreaverDay,
+  getRetrieverTestData,
   normalizeBuyerName,
   getDaysInRangeUTC,
   getDefaultReportWindow,

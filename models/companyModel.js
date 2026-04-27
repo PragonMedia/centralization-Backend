@@ -29,6 +29,13 @@ const companySchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    platform: {
+      type: String,
+      required: false,
+      trim: true,
+      enum: ["ringba", "retriever"],
+      default: "ringba",
+    },
   },
   { timestamps: true }
 );
