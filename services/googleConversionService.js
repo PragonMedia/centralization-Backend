@@ -59,6 +59,30 @@ function resolveConversionDateTime(value) {
   return normalized;
 }
 
+function resolveConversionValue(payload = {}) {
+  const candidates = [
+    payload.conversion_value,
+    payload.conversionValue,
+    payload.payout,
+    payload.value,
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+    const parsed =
+      typeof candidate === "number" ? candidate : Number(String(candidate).trim());
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+
+  return GOOGLE_CONVERSION_VALUE;
+}
+
+function resolveCurrencyCode(payload = {}) {
+  const raw = payload.currency_code ?? payload.currencyCode ?? GOOGLE_CURRENCY_CODE;
+  const normalized = typeof raw === "string" ? raw.trim().toUpperCase() : "";
+  return normalized || GOOGLE_CURRENCY_CODE;
+}
+
 function getGoogleAdsEnv() {
   const clientId = (process.env.GOOGLE_ADS_CLIENT_ID || "").trim();
   const clientSecret = (process.env.GOOGLE_ADS_CLIENT_SECRET || "").trim();
@@ -104,6 +128,8 @@ function buildUploadPayload(input) {
     conversionDateTime,
     clickIdType,
     clickIdValue,
+    conversionValue,
+    currencyCode,
   } = input;
 
   return {
@@ -111,8 +137,8 @@ function buildUploadPayload(input) {
       {
         conversionAction: `customers/${GOOGLE_CUSTOMER_ID}/conversionActions/${conversionActionId}`,
         conversionDateTime,
-        conversionValue: GOOGLE_CONVERSION_VALUE,
-        currencyCode: GOOGLE_CURRENCY_CODE,
+        conversionValue,
+        currencyCode,
         [clickIdType]: clickIdValue,
       },
     ],
@@ -152,6 +178,8 @@ async function uploadGoogleClickConversion(payload = {}) {
   }
 
   const conversionDateTime = resolveConversionDateTime(payload.conversionDateTime);
+  const conversionValue = resolveConversionValue(payload);
+  const currencyCode = resolveCurrencyCode(payload);
 
   if (getDryRun()) {
     return {
@@ -163,8 +191,8 @@ async function uploadGoogleClickConversion(payload = {}) {
       conversionDateTime,
       googleCustomerId: GOOGLE_CUSTOMER_ID,
       loginCustomerId: GOOGLE_LOGIN_CUSTOMER_ID,
-      conversionValue: GOOGLE_CONVERSION_VALUE,
-      currencyCode: GOOGLE_CURRENCY_CODE,
+      conversionValue,
+      currencyCode,
     };
   }
 
@@ -175,6 +203,8 @@ async function uploadGoogleClickConversion(payload = {}) {
     conversionDateTime,
     clickIdType: clickId.clickIdType,
     clickIdValue: clickId.clickIdValue,
+    conversionValue,
+    currencyCode,
   });
 
   const url = `${GOOGLE_ADS_API_BASE}/customers/${GOOGLE_CUSTOMER_ID}:uploadClickConversions`;
