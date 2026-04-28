@@ -1,4 +1,6 @@
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_ADS_API_VERSION = (process.env.GOOGLE_ADS_API_VERSION || "v22").trim();
@@ -8,6 +10,12 @@ const GOOGLE_CUSTOMER_ID = "4316986825";
 const GOOGLE_LOGIN_CUSTOMER_ID = "4316986825";
 const GOOGLE_CONVERSION_VALUE = 1;
 const GOOGLE_CURRENCY_CODE = "USD";
+const GOOGLE_CONVERSION_LOG_FILE = path.join(
+  __dirname,
+  "..",
+  "logs",
+  "google-conversions.jsonl"
+);
 
 function isTruthyEnv(value) {
   if (value == null) return false;
@@ -81,6 +89,32 @@ function resolveCurrencyCode(payload = {}) {
   const raw = payload.currency_code ?? payload.currencyCode ?? GOOGLE_CURRENCY_CODE;
   const normalized = typeof raw === "string" ? raw.trim().toUpperCase() : "";
   return normalized || GOOGLE_CURRENCY_CODE;
+}
+
+function maskClickId(value) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return "";
+  if (raw.length <= 8) return `${raw.slice(0, 2)}***${raw.slice(-2)}`;
+  return `${raw.slice(0, 4)}...${raw.slice(-4)}`;
+}
+
+async function writeGoogleConversionLog(entry = {}) {
+  const payload = {
+    ts: new Date().toISOString(),
+    ...entry,
+  };
+  try {
+    await fs.promises.mkdir(path.dirname(GOOGLE_CONVERSION_LOG_FILE), {
+      recursive: true,
+    });
+    await fs.promises.appendFile(
+      GOOGLE_CONVERSION_LOG_FILE,
+      `${JSON.stringify(payload)}\n`,
+      "utf8"
+    );
+  } catch (error) {
+    console.error("Failed to write google conversion log:", error.message);
+  }
 }
 
 function getGoogleAdsEnv() {
@@ -158,89 +192,128 @@ function parseGooglePartialFailure(responseData) {
 
 async function uploadGoogleClickConversion(payload = {}) {
   const clickId = pickClickId(payload);
-  if (!clickId) {
-    return {
-      ok: false,
-      statusCode: 400,
-      error: "missing_click_id",
-      message: "One of gclid, gbraid, or wbraid is required.",
-    };
-  }
-
   const conversionActionId = validateConversionActionId(payload.conversionActionId);
-  if (!conversionActionId) {
-    return {
-      ok: false,
-      statusCode: 400,
-      error: "invalid_conversion_action_id",
-      message: "conversionActionId is required and must be numeric.",
-    };
-  }
-
   const conversionDateTime = resolveConversionDateTime(payload.conversionDateTime);
   const conversionValue = resolveConversionValue(payload);
   const currencyCode = resolveCurrencyCode(payload);
-
-  if (getDryRun()) {
-    return {
-      ok: true,
-      uploaded: true,
-      dryRun: true,
-      clickIdType: clickId.clickIdType,
-      conversionActionId,
-      conversionDateTime,
-      googleCustomerId: GOOGLE_CUSTOMER_ID,
-      loginCustomerId: GOOGLE_LOGIN_CUSTOMER_ID,
-      conversionValue,
-      currencyCode,
-    };
-  }
-
-  const accessToken = await getGoogleAccessToken();
-  const { developerToken } = getGoogleAdsEnv();
-  const requestBody = buildUploadPayload({
-    conversionActionId,
+  const logContext = {
+    googleCustomerId: GOOGLE_CUSTOMER_ID,
+    loginCustomerId: GOOGLE_LOGIN_CUSTOMER_ID,
+    conversionActionId: conversionActionId || null,
     conversionDateTime,
-    clickIdType: clickId.clickIdType,
-    clickIdValue: clickId.clickIdValue,
     conversionValue,
     currencyCode,
-  });
+    clickIdType: clickId?.clickIdType || null,
+    clickIdMasked: maskClickId(clickId?.clickIdValue || ""),
+    validateOnly: getValidateOnly(),
+    dryRun: getDryRun(),
+  };
 
-  const url = `${GOOGLE_ADS_API_BASE}/customers/${GOOGLE_CUSTOMER_ID}:uploadClickConversions`;
-  const response = await axios.post(url, requestBody, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "developer-token": developerToken,
-      "login-customer-id": GOOGLE_LOGIN_CUSTOMER_ID,
-      "Content-Type": "application/json",
-    },
-    timeout: 30000,
-  });
+  try {
+    if (!clickId) {
+      const result = {
+        ok: false,
+        statusCode: 400,
+        error: "missing_click_id",
+        message: "One of gclid, gbraid, or wbraid is required.",
+      };
+      await writeGoogleConversionLog({ ...logContext, outcome: "validation_error", result });
+      return result;
+    }
 
-  const partialFailure = parseGooglePartialFailure(response.data);
-  if (partialFailure) {
-    return {
-      ok: false,
-      statusCode: 500,
-      error: "google_upload_partial_failure",
-      message: "google upload partial failure",
-      details: partialFailure,
+    if (!conversionActionId) {
+      const result = {
+        ok: false,
+        statusCode: 400,
+        error: "invalid_conversion_action_id",
+        message: "conversionActionId is required and must be numeric.",
+      };
+      await writeGoogleConversionLog({ ...logContext, outcome: "validation_error", result });
+      return result;
+    }
+
+    if (getDryRun()) {
+      const result = {
+        ok: true,
+        uploaded: true,
+        dryRun: true,
+        clickIdType: clickId.clickIdType,
+        conversionActionId,
+        conversionDateTime,
+        googleCustomerId: GOOGLE_CUSTOMER_ID,
+        loginCustomerId: GOOGLE_LOGIN_CUSTOMER_ID,
+        conversionValue,
+        currencyCode,
+      };
+      await writeGoogleConversionLog({ ...logContext, outcome: "dry_run", result });
+      return result;
+    }
+
+    const accessToken = await getGoogleAccessToken();
+    const { developerToken } = getGoogleAdsEnv();
+    const requestBody = buildUploadPayload({
+      conversionActionId,
+      conversionDateTime,
+      clickIdType: clickId.clickIdType,
+      clickIdValue: clickId.clickIdValue,
+      conversionValue,
+      currencyCode,
+    });
+
+    const url = `${GOOGLE_ADS_API_BASE}/customers/${GOOGLE_CUSTOMER_ID}:uploadClickConversions`;
+    const response = await axios.post(url, requestBody, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "developer-token": developerToken,
+        "login-customer-id": GOOGLE_LOGIN_CUSTOMER_ID,
+        "Content-Type": "application/json",
+      },
+      timeout: 30000,
+    });
+
+    const partialFailure = parseGooglePartialFailure(response.data);
+    if (partialFailure) {
+      const result = {
+        ok: false,
+        statusCode: 500,
+        error: "google_upload_partial_failure",
+        message: "google upload partial failure",
+        details: partialFailure,
+        clickIdType: clickId.clickIdType,
+        conversionActionId,
+        conversionDateTime,
+      };
+      await writeGoogleConversionLog({
+        ...logContext,
+        outcome: "partial_failure",
+        result,
+      });
+      return result;
+    }
+
+    const result = {
+      ok: true,
+      uploaded: true,
       clickIdType: clickId.clickIdType,
       conversionActionId,
       conversionDateTime,
+      validateOnly: getValidateOnly(),
+      results: response.data?.results || [],
     };
+    await writeGoogleConversionLog({ ...logContext, outcome: "success", result });
+    return result;
+  } catch (error) {
+    await writeGoogleConversionLog({
+      ...logContext,
+      outcome: "exception",
+      error: {
+        message: error.message,
+        status: error.response?.status || null,
+        data: error.response?.data || null,
+      },
+    });
+    throw error;
   }
-
-  return {
-    ok: true,
-    uploaded: true,
-    clickIdType: clickId.clickIdType,
-    conversionActionId,
-    conversionDateTime,
-    validateOnly: getValidateOnly(),
-    results: response.data?.results || [],
-  };
 }
 
 module.exports = {

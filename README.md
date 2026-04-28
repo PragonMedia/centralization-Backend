@@ -66,3 +66,5 @@ frontend code - cd /var/www/paragon-fe && sudo -u www-data git fetch origin && s
   - conversion value fallback = `1`
   - currency fallback = `USD`
 - Google Ads API version is configurable via `GOOGLE_ADS_API_VERSION` (default: `v22`)
+- Temporary JSON log file for Google conversion attempts:
+  - `logs/google-conversions.jsonl` (one JSON object per line; success + failure + exceptions)
