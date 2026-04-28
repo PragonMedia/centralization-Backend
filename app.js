@@ -17,6 +17,7 @@ const ringbaRouter = require("./routes/ringbaRoutes");
 const trackRouter = require("./routes/trackRoutes");
 const accountingRouter = require("./routes/accountingRoutes");
 const rokuLogsRouter = require("./routes/rokuLogsRoutes");
+const webhookRouter = require("./routes/webhookRoutes");
 const { ringbaBodyParser } = require("./middleware/ringbaBodyParser");
 
 const app = express();
@@ -203,6 +204,7 @@ app.use("/api/v1/track", trackRouter);
 app.use("/api/v1/accounting", accountingRouter);
 app.use("/api/v1", rokuLogsRouter);
 app.use("/api/v1", routeRouter); // ✅ example endpoint: POST /routes
+app.use("/webhooks", webhookRouter);
 
 // 11. Global error handling middleware (must be last)
 app.use((err, req, res, next) => {

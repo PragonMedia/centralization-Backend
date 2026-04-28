@@ -50,3 +50,17 @@ frontend code - cd /var/www/paragon-fe && sudo -u www-data git fetch origin && s
   "revenue": 123.45
 }
 ```
+
+## Google Conversion Webhook
+
+- Endpoint: `POST /webhooks/ringba/google-conversion`
+- Accepts payload fields:
+  - `conversionActionId` (required, numeric string)
+  - `conversionDateTime` (optional, defaults to current UTC in Google format)
+  - click id priority: `gclid` -> `gbraid` -> `wbraid` (at least one required)
+- Hardcoded upload context for phase 1:
+  - `googleCustomerId = 4316986825`
+  - `loginCustomerId = 4316986825`
+  - `conversionValue = 1`
+  - `currencyCode = USD`
+- Google Ads API version is configurable via `GOOGLE_ADS_API_VERSION` (default: `v22`)
