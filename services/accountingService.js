@@ -295,7 +295,16 @@ async function getRevenueWeekFromRingba(options = {}) {
  * @returns {Promise<{ success: boolean, revenueByDay?: Array<{ day: string, revenue: number|"", records: Array<{ buyer, conversionAmount, buyerConversionAmount? }> }>, message?: string }>}
  */
 async function getRevenueRangeFromRingba(options = {}) {
-  const { accountID, apiToken, start, end, baseUrl, buyersIndex } = options;
+  const {
+    accountID,
+    apiToken,
+    start,
+    end,
+    baseUrl,
+    buyersIndex,
+    includeTodayLive = false,
+    currentReportEnd = "",
+  } = options;
   if (!accountID || !apiToken) {
     return {
       success: false,
@@ -312,11 +321,31 @@ async function getRevenueRangeFromRingba(options = {}) {
   const revenueByDay = [];
   const buyerDayCache = new Map();
   for (const { date, dayLabel, isToday } of days) {
-    if (isToday) {
+    if (isToday && !includeTodayLive) {
       revenueByDay.push({ day: dayLabel, revenue: "", records: [] });
       continue;
     }
-    const { reportStart, reportEnd } = getRingbaDayWindow(date);
+    const { reportStart, reportEnd } =
+      isToday && includeTodayLive
+        ? {
+            reportStart: new Date(
+              Date.UTC(
+                date.getUTCFullYear(),
+                date.getUTCMonth(),
+                date.getUTCDate(),
+                4,
+                0,
+                0,
+                0
+              )
+            )
+              .toISOString()
+              .replace(/\.\d{3}Z$/, "Z"),
+            reportEnd:
+              (typeof currentReportEnd === "string" && currentReportEnd.trim()) ||
+              new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+          }
+        : getRingbaDayWindow(date);
     const result = await getRevenueFromRingba({
       accountID,
       apiToken,
@@ -466,7 +495,15 @@ async function getRevenueFromRetreaverDay(options = {}) {
  * @returns {Promise<{ success: boolean, revenueByDay?: Array<{ day: string, revenue: number|"", records: Array }>, message?: string }>}
  */
 async function getRevenueRangeFromRetriever(options = {}) {
-  const { accountID, start, end, apiKey, baseUrl } = options;
+  const {
+    accountID,
+    start,
+    end,
+    apiKey,
+    baseUrl,
+    includeTodayLive = false,
+    currentReportEnd = "",
+  } = options;
   if (!accountID) {
     return {
       success: false,
@@ -483,11 +520,31 @@ async function getRevenueRangeFromRetriever(options = {}) {
 
   const revenueByDay = [];
   for (const { date, dayLabel, isToday } of days) {
-    if (isToday) {
+    if (isToday && !includeTodayLive) {
       revenueByDay.push({ day: dayLabel, revenue: "", records: [] });
       continue;
     }
-    const { reportStart, reportEnd } = getRingbaDayWindow(date);
+    const { reportStart, reportEnd } =
+      isToday && includeTodayLive
+        ? {
+            reportStart: new Date(
+              Date.UTC(
+                date.getUTCFullYear(),
+                date.getUTCMonth(),
+                date.getUTCDate(),
+                4,
+                0,
+                0,
+                0
+              )
+            )
+              .toISOString()
+              .replace(/\.\d{3}Z$/, "Z"),
+            reportEnd:
+              (typeof currentReportEnd === "string" && currentReportEnd.trim()) ||
+              new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+          }
+        : getRingbaDayWindow(date);
     const result = await getRevenueFromRetreaverDay({
       accountID,
       apiKey,

@@ -3,7 +3,7 @@ const axios = require("axios");
 
 const accountingController = require("../controllers/accountingController");
 const accountingService = require("../services/accountingService");
-const Company = require("../models/companyModel");
+const accountingRevenueCacheService = require("../services/accountingRevenueCacheService");
 
 function createRes() {
   return {
@@ -21,43 +21,51 @@ function createRes() {
 }
 
 async function run() {
-  const originalFind = Company.find;
   const originalRingba = accountingService.getRevenueRangeFromRingba;
   const originalRetriever = accountingService.getRevenueRangeFromRetriever;
   const originalRetrieverTestData = accountingService.getRetrieverTestData;
+  const originalRefreshRevenueCache = accountingRevenueCacheService.refreshRevenueCache;
+  const originalGetLatestRevenueCache = accountingRevenueCacheService.getLatestRevenueCache;
   const originalAxiosGet = axios.get;
   const originalAxiosPost = axios.post;
 
   try {
-    // Mixed-platform revenue route test (controller contract)
-    Company.find = () => ({
-      lean: async () => [
-        { companyName: "RingbaCo", accountID: "ra-1", apiToken: "tok", platform: "ringba", net: "10%" },
-        { companyName: "RetrieverCo", accountID: "re-1", platform: "retriever", net: "12%" },
-      ],
+    // Refresh endpoint contract (manual cache write)
+    accountingRevenueCacheService.refreshRevenueCache = async () => ({
+      cache: { refreshedAt: "2026-04-15T00:00:00.000Z" },
+      windowData: {
+        startDate: "2026-02-15",
+        endDateTimeIso: "2026-04-15T00:00:00Z",
+      },
+      payload: {
+        companies: [{ companyName: "PGNM" }, { companyName: "Spring Venture Group" }],
+      },
     });
-
-    accountingService.getRevenueRangeFromRingba = async () => ({
-      success: true,
-      revenueByDay: [{ day: "04/14/2026", revenue: 100, records: [] }],
-    });
-    accountingService.getRevenueRangeFromRetriever = async () => {
-      return {
-      success: true,
-      revenueByDay: [{ day: "04/14/2026", revenue: 55.5, records: [{ buyer: "retriever-mock", conversionAmount: "55.5" }] }],
-      };
-    };
-
-    const req = { body: { start: "2026-04-14", end: "2026-04-14" } };
+    const req = { body: {} };
     const res = createRes();
     await accountingController.getRevenue(req, res);
 
-    assert.strictEqual(res.statusCode, 200, "expected 200 for mixed-platform revenue");
+    assert.strictEqual(res.statusCode, 200, "expected 200 for cache refresh");
     assert.strictEqual(res.payload.success, true);
-    assert.strictEqual(Array.isArray(res.payload.companies), true);
-    assert.strictEqual(res.payload.companies.length, 2);
-    assert.strictEqual(res.payload.companies[0].platform, "ringba");
-    assert.strictEqual(res.payload.companies[1].platform, "retriever");
+    assert.strictEqual(res.payload.companiesCount, 2);
+
+    // Cached endpoint contract (frontend read path)
+    accountingRevenueCacheService.getLatestRevenueCache = async () => ({
+      refreshedAt: "2026-04-15T00:00:00.000Z",
+      windowStart: "2026-02-15T00:00:00.000Z",
+      windowEnd: "2026-04-15T00:00:00.000Z",
+      trigger: "scheduler_1am_et",
+      payload: {
+        success: true,
+        companies: [{ companyName: "PGNM", revenue: [] }],
+      },
+    });
+    const cachedRes = createRes();
+    await accountingController.getCachedRevenue({}, cachedRes);
+    assert.strictEqual(cachedRes.statusCode, 200);
+    assert.strictEqual(cachedRes.payload.success, true);
+    assert.strictEqual(Array.isArray(cachedRes.payload.companies), true);
+    assert.strictEqual(cachedRes.payload.cacheMeta.trigger, "scheduler_1am_et");
 
     // Retriever test endpoint response shape
     accountingService.getRetrieverTestData = async () => ({
@@ -170,10 +178,11 @@ async function run() {
 
     console.log("PASS accountingRetrieverPhase1.test");
   } finally {
-    Company.find = originalFind;
     accountingService.getRevenueRangeFromRingba = originalRingba;
     accountingService.getRevenueRangeFromRetriever = originalRetriever;
     accountingService.getRetrieverTestData = originalRetrieverTestData;
+    accountingRevenueCacheService.refreshRevenueCache = originalRefreshRevenueCache;
+    accountingRevenueCacheService.getLatestRevenueCache = originalGetLatestRevenueCache;
     axios.get = originalAxiosGet;
     axios.post = originalAxiosPost;
   }

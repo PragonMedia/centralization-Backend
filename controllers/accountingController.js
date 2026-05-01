@@ -5,6 +5,7 @@
 const Company = require("../models/companyModel");
 const accountingService = require("../services/accountingService");
 const RINGBA_CONFIG = require("../config/ringbaApi");
+const accountingRevenueCacheService = require("../services/accountingRevenueCacheService");
 const SUPPORTED_PLATFORMS = ["ringba", "retriever"];
 
 exports.getRetrieverTestData = async (req, res) => {
@@ -24,100 +25,58 @@ exports.getRetrieverTestData = async (req, res) => {
 
 /**
  * POST /api/v1/accounting/revenue
- * Body: { start: "YYYY-MM-DD", end: "YYYY-MM-DD" } (UTC dates; inclusive range).
- * Fetches revenue for every company for each day in range. Today (UTC) gets revenue "".
- * Response: { success, companies: [ { companyName, revenue: [ { day: "MM/DD/YYYY", revenue: number|"" } ] } ] }.
+ * Manual cache refresh endpoint.
+ * Rebuilds 2-month rolling accounting data and stores a single latest snapshot.
  */
 exports.getRevenue = async (req, res) => {
   try {
-    const { start, end } = req.body || {};
-    const startStr = typeof start === "string" ? start.trim() : "";
-    const endStr = typeof end === "string" ? end.trim() : "";
-    if (!startStr || !endStr) {
-      return res.status(400).json({
-        success: false,
-        error: "Request body must include start and end dates (e.g. { \"start\": \"2026-03-08\", \"end\": \"2026-03-14\" }).",
-      });
-    }
-    const daysInRange = accountingService.getDaysInRangeUTC(startStr, endStr);
-    if (!daysInRange || daysInRange.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid date range. Use start and end as YYYY-MM-DD with end >= start.",
-      });
-    }
-
-    const companies = await Company.find().lean();
-    if (!companies.length) {
-      return res.status(200).json({
-        success: false,
-        message:
-          "No companies found. Add documents to the companies collection (run node seedCompanies.js or create via API).",
-        companies: [],
-      });
-    }
-
-    // Build buyer index from all companies (normalized companyName -> platform account)
-    const buyersIndex = companies
-      .filter((c) => {
-        const platform = (typeof c.platform === "string" ? c.platform.trim().toLowerCase() : "") || "ringba";
-        return (platform === "ringba" || platform === "retriever") && c.companyName && c.accountID;
-      })
-      .map((c) => ({
-        companyName: c.companyName,
-        accountID: c.accountID,
-        platform: (typeof c.platform === "string" ? c.platform.trim().toLowerCase() : "") || "ringba",
-        apiToken: (c.apiToken && c.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "",
-        normalizedName: accountingService.normalizeBuyerName(c.companyName),
-      }));
-
-    const companiesWithRevenue = [];
-
-    for (const company of companies) {
-      const platform = (typeof company.platform === "string" ? company.platform.trim().toLowerCase() : "") || "ringba";
-      const apiToken = (company.apiToken && company.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "";
-      let result;
-      if (platform === "retriever") {
-        result = await accountingService.getRevenueRangeFromRetriever({
-          accountID: company.accountID,
-          apiKey: company.apiToken,
-          start: startStr,
-          end: endStr,
-        });
-      } else {
-        const isPGNMBase = accountingService.normalizeBuyerName(company.companyName) === "pgnm";
-        result = await accountingService.getRevenueRangeFromRingba({
-          accountID: company.accountID,
-          apiToken,
-          start: startStr,
-          end: endStr,
-          buyersIndex: isPGNMBase ? buyersIndex : [],
-        });
-      }
-
-      const revenue =
-        result.success && Array.isArray(result.revenueByDay)
-          ? result.revenueByDay
-          : [];
-
-      companiesWithRevenue.push({
-        companyName: company.companyName,
-        accountID: company.accountID,
-        net: company.net || "",
-        platform,
-        revenue,
-      });
-    }
-
+    const refreshed = await accountingRevenueCacheService.refreshRevenueCache({
+      trigger: "manual_endpoint",
+    });
     return res.status(200).json({
       success: true,
-      companies: companiesWithRevenue,
+      message: "Accounting revenue cache refreshed.",
+      refreshedAt: refreshed.cache?.refreshedAt || null,
+      windowStart: refreshed.windowData?.startDate || null,
+      windowEnd: refreshed.windowData?.endDateTimeIso || null,
+      companiesCount: refreshed.payload?.companies?.length || 0,
     });
   } catch (err) {
     console.error("Accounting getRevenue error:", err);
     return res.status(500).json({
       success: false,
       error: "Failed to fetch revenue.",
+    });
+  }
+};
+
+/**
+ * GET /api/v1/accounting/revenue/cached
+ * Fast read endpoint for frontend consumption.
+ */
+exports.getCachedRevenue = async (req, res) => {
+  try {
+    const cache = await accountingRevenueCacheService.getLatestRevenueCache();
+    if (!cache || !cache.payload) {
+      return res.status(404).json({
+        success: false,
+        error: "No cached accounting revenue yet. Trigger POST /api/v1/accounting/revenue first.",
+      });
+    }
+    return res.status(200).json({
+      ...cache.payload,
+      cacheMeta: {
+        refreshedAt: cache.refreshedAt,
+        windowStart: cache.windowStart,
+        windowEnd: cache.windowEnd,
+        trigger: cache.trigger,
+      },
+    });
+  } catch (err) {
+    console.error("Accounting getCachedRevenue error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch cached revenue.",
     });
   }
 };

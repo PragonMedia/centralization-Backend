@@ -18,12 +18,18 @@ frontend code - cd /var/www/paragon-fe && sudo -u www-data git fetch origin && s
 ## Accounting Platform Notes
 
 - Company records support `platform`: `ringba` or `retriever` (default `ringba`).
-- Revenue endpoint is still `POST /api/v1/accounting/revenue` and keeps the same response shape.
+- Revenue refresh endpoint is `POST /api/v1/accounting/revenue` (manual cache rebuild).
+- Fast frontend read endpoint is `GET /api/v1/accounting/revenue/cached`.
 - Revenue source selection is now per-company:
   - `ringba` -> existing Ringba Insights flow
   - `retriever` -> live Retreaver calls API (`/calls.json`) using company `accountID` as `company_id` and summing `payout` per day
     - `records[].buyer` is grouped by publisher label (`afid`) first, with fallback to `affiliate_id`, then existing ID fields if needed
     - PGNM (Ringba base) buyer comparison now uses matched buyer company `platform`: Ringba buyers compare via Ringba, Retriever buyers compare via Retreaver
+- Cache architecture:
+  - Refresh window is rolling 2 months (`start = now - 2 months`, `end = now`).
+  - Scheduler runs daily at `1:00 AM America/New_York`.
+  - Cached payload is stored in Mongo collection `accountingRevenue`.
+  - Old cache is deleted on each refresh (single latest snapshot only).
 - Test endpoint for Retriever live payload:
   - `GET /api/v1/accounting/retriever/test-data`
   - Optional query: `?accountID=210309` (if omitted, uses `RETREAVER_COMPANY_ID` env)

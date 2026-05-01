@@ -3,6 +3,9 @@ require("dotenv").config();
 
 const app = require("./app");
 const mongoose = require("mongoose");
+const {
+  startAccountingRevenueScheduler,
+} = require("./services/accountingRevenueScheduler");
 
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
@@ -17,7 +20,10 @@ mongoose
     socketTimeoutMS: 45000, // Close connections after 45s of inactivity
     connectTimeoutMS: 10000, // Connection timeout
   })
-  .then(() => console.log("✅ Connected to MongoDB Atlas"))
+  .then(() => {
+    console.log("✅ Connected to MongoDB Atlas");
+    startAccountingRevenueScheduler();
+  })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 // 🟢 Start listening for requests

@@ -7,6 +7,7 @@ const router = express.Router();
 const accountingController = require("../controllers/accountingController");
 
 router.post("/revenue", accountingController.getRevenue);
+router.get("/revenue/cached", accountingController.getCachedRevenue);
 router.get("/retriever/test-data", accountingController.getRetrieverTestData);
 router.get("/companies", accountingController.listCompanies);
 router.post("/companies", accountingController.createCompany);
