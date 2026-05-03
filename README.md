@@ -20,6 +20,8 @@ frontend code - cd /var/www/paragon-fe && sudo -u www-data git fetch origin && s
 - Company records support `platform`: `ringba` or `retriever` (default `ringba`).
 - Revenue refresh endpoint is `POST /api/v1/accounting/revenue` (manual cache rebuild).
 - Fast frontend read endpoint is `GET /api/v1/accounting/revenue/cached`.
+- PGNM Ringba buyer dropdown (live Insights, not Mongo): `GET /api/v1/accounting/ringba/pgnm/buyers`
+  - Optional `?days=30` (default 30, max 120 rolling UTC calendar days ending today), or `?start=YYYY-MM-DD&end=YYYY-MM-DD` (max 120-day span).
 - Revenue source selection is now per-company:
   - `ringba` -> existing Ringba Insights flow
   - `retriever` -> live Retreaver calls API (`/calls.json`) using company `accountID` as `company_id` and summing `payout` per day

@@ -711,6 +711,70 @@ async function getRevenueFromRingba(options = {}) {
   }
 }
 
+/** Max calendar-day span for Ringba buyer dropdown / list endpoints (single insights call). */
+const MAX_ACCOUNTING_BUYER_LIST_DAYS = 120;
+
+/**
+ * Distinct buyer labels from Ringba Insights for one account over a UTC calendar range (inclusive).
+ * Uses one grouped-by-buyer request with reportStart = first day's Ringba window start,
+ * reportEnd = last day's Ringba window end.
+ */
+async function listRingbaBuyersForDateRange(options = {}) {
+  const { accountID, apiToken, start, end, baseUrl } = options;
+  const startDate = parseUTCDate(start);
+  const endDate = parseUTCDate(end);
+  if (!startDate || !endDate || endDate < startDate) {
+    return {
+      success: false,
+      message:
+        "Invalid date range. Use start and end as YYYY-MM-DD (UTC calendar days) with end >= start.",
+    };
+  }
+  const spanDays =
+    Math.floor((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  if (spanDays > MAX_ACCOUNTING_BUYER_LIST_DAYS) {
+    return {
+      success: false,
+      message: `Date range too large (max ${MAX_ACCOUNTING_BUYER_LIST_DAYS} days).`,
+    };
+  }
+  const { reportStart } = getRingbaDayWindow(startDate);
+  const { reportEnd } = getRingbaDayWindow(endDate);
+  const result = await getRevenueFromRingba({
+    accountID,
+    apiToken,
+    reportStart,
+    reportEnd,
+    baseUrl,
+    useBuyerPayload: false,
+  });
+  if (!result.success) {
+    return {
+      success: false,
+      message: result.message || "Ringba insights request failed.",
+    };
+  }
+  const unique = new Set();
+  for (const r of result.records || []) {
+    const b = r.buyer != null ? String(r.buyer).trim() : "";
+    if (b && b !== "-no value-") unique.add(b);
+  }
+  const buyers = [...unique].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" })
+  );
+  const ymd = (d) =>
+    `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
+      d.getUTCDate()
+    ).padStart(2, "0")}`;
+  return {
+    success: true,
+    source: "ringba_insights",
+    buyers,
+    window: { start: ymd(startDate), end: ymd(endDate) },
+    period: result.period,
+  };
+}
+
 module.exports = {
   getRevenueFromRingba,
   getRevenueWeekFromRingba,
@@ -722,4 +786,6 @@ module.exports = {
   getDaysInRangeUTC,
   getDefaultReportWindow,
   buildInsightsBody,
+  MAX_ACCOUNTING_BUYER_LIST_DAYS,
+  listRingbaBuyersForDateRange,
 };

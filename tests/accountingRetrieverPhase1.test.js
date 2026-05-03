@@ -166,6 +166,38 @@ async function run() {
       },
     ]);
 
+    axios.post = async () => ({
+      data: {
+        isSuccessful: true,
+        report: {
+          records: [
+            { buyer: "Zebra Buyer", conversionAmount: 1 },
+            { buyer: "Alpha Buyer", conversionAmount: 2 },
+            { buyer: "Alpha Buyer", conversionAmount: 3 },
+            { buyer: "-no value-", conversionAmount: 0 },
+          ],
+        },
+      },
+    });
+    const buyerList = await accountingService.listRingbaBuyersForDateRange({
+      accountID: "acc",
+      apiToken: "tok",
+      start: "2026-04-01",
+      end: "2026-04-03",
+    });
+    assert.strictEqual(buyerList.success, true);
+    assert.deepStrictEqual(buyerList.buyers, ["Alpha Buyer", "Zebra Buyer"]);
+    assert.strictEqual(buyerList.window.start, "2026-04-01");
+    assert.strictEqual(buyerList.window.end, "2026-04-03");
+
+    const tooWide = await accountingService.listRingbaBuyersForDateRange({
+      accountID: "acc",
+      apiToken: "tok",
+      start: "2026-01-01",
+      end: "2026-06-01",
+    });
+    assert.strictEqual(tooWide.success, false);
+
     // Ringba regression: service still returns contract
     const ringbaContract = await accountingService.getRevenueRangeFromRingba({
       accountID: "any",

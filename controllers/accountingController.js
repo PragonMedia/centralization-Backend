@@ -81,6 +81,99 @@ exports.getCachedRevenue = async (req, res) => {
   }
 };
 
+function toYmdUtc(d) {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    d.getUTCDate()
+  ).padStart(2, "0")}`;
+}
+
+/**
+ * GET /api/v1/accounting/ringba/pgnm/buyers
+ * Lightweight Ringba Insights buyer list for the PGNM Ringba account (dropdowns).
+ * Query: optional `days` (default 30, max 120), or `start` + `end` as YYYY-MM-DD (UTC).
+ */
+exports.getPgnmRingbaBuyers = async (req, res) => {
+  try {
+    const maxDays = accountingService.MAX_ACCOUNTING_BUYER_LIST_DAYS || 120;
+    let startStr;
+    let endStr;
+    const qStart = typeof req.query?.start === "string" ? req.query.start.trim() : "";
+    const qEnd = typeof req.query?.end === "string" ? req.query.end.trim() : "";
+    if (qStart && qEnd) {
+      startStr = qStart.slice(0, 10);
+      endStr = qEnd.slice(0, 10);
+    } else {
+      let days = parseInt(req.query?.days, 10);
+      if (Number.isNaN(days) || days < 1) days = 30;
+      if (days > maxDays) days = maxDays;
+      const now = new Date();
+      const endUtc = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+      );
+      const startUtc = new Date(endUtc);
+      startUtc.setUTCDate(startUtc.getUTCDate() - (days - 1));
+      startStr = toYmdUtc(startUtc);
+      endStr = toYmdUtc(endUtc);
+    }
+
+    const companies = await Company.find().lean();
+    const pgnm = companies.find((c) => {
+      if (accountingService.normalizeBuyerName(c.companyName) !== "pgnm") return false;
+      const platform =
+        (typeof c.platform === "string" ? c.platform.trim().toLowerCase() : "") || "ringba";
+      if (platform !== "ringba") return false;
+      return Boolean(c.accountID);
+    });
+
+    if (!pgnm) {
+      return res.status(404).json({
+        success: false,
+        error:
+          "No Ringba PGNM company found. Add a company whose name normalizes to PGNM with platform ringba.",
+      });
+    }
+
+    const apiToken = (pgnm.apiToken && String(pgnm.apiToken).trim()) || RINGBA_CONFIG.API_KEY;
+    if (!apiToken) {
+      return res.status(500).json({
+        success: false,
+        error: "PGNM has no apiToken and RINGBA_API_KEY / RINGBA_API_TOKEN is unset.",
+      });
+    }
+
+    const payload = await accountingService.listRingbaBuyersForDateRange({
+      accountID: pgnm.accountID,
+      apiToken,
+      start: startStr,
+      end: endStr,
+      baseUrl: RINGBA_CONFIG.BASE_URL,
+    });
+
+    if (!payload.success) {
+      const msg = payload.message || "Failed to list buyers from Ringba.";
+      const unauthorized = /invalid ringba api token/i.test(msg);
+      return res.status(unauthorized ? 401 : 400).json({
+        success: false,
+        error: msg,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      source: payload.source,
+      buyers: payload.buyers,
+      window: payload.window,
+      insightsPeriod: payload.period,
+    });
+  } catch (err) {
+    console.error("Accounting getPgnmRingbaBuyers error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch PGNM Ringba buyers.",
+    });
+  }
+};
+
 /**
  * GET /api/v1/accounting/companies
  * List all companies (companyName, accountID; apiToken not returned).
