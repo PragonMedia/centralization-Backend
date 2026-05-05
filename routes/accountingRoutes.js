@@ -7,6 +7,7 @@ const router = express.Router();
 const accountingController = require("../controllers/accountingController");
 
 router.post("/revenue", accountingController.getRevenue);
+router.get("/revenue/refresh-status", accountingController.getRevenueRefreshStatus);
 router.get("/revenue/cached", accountingController.getCachedRevenue);
 router.get("/ringba/pgnm/buyers", accountingController.getPgnmRingbaBuyers);
 router.get("/retriever/test-data", accountingController.getRetrieverTestData);

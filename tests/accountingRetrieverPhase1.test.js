@@ -28,6 +28,7 @@ async function run() {
   const originalGetLatestRevenueCache = accountingRevenueCacheService.getLatestRevenueCache;
   const originalAxiosGet = axios.get;
   const originalAxiosPost = axios.post;
+  const originalRetrieverEnvKey = process.env.RETREAVER_API_KEY;
 
   try {
     // Refresh endpoint contract (manual cache write)
@@ -41,13 +42,22 @@ async function run() {
         companies: [{ companyName: "PGNM" }, { companyName: "Spring Venture Group" }],
       },
     });
-    const req = { body: {} };
+    const req = { body: {}, query: { wait: "true" } };
     const res = createRes();
     await accountingController.getRevenue(req, res);
 
     assert.strictEqual(res.statusCode, 200, "expected 200 for cache refresh");
     assert.strictEqual(res.payload.success, true);
     assert.strictEqual(res.payload.companiesCount, 2);
+
+    // Async refresh mode returns quickly with accepted status.
+    accountingRevenueCacheService.refreshRevenueCache = async () =>
+      new Promise((resolve) => setTimeout(() => resolve({}), 500));
+    const asyncRes = createRes();
+    await accountingController.getRevenue({ body: {}, query: {} }, asyncRes);
+    assert.strictEqual(asyncRes.statusCode, 202);
+    assert.strictEqual(asyncRes.payload.success, true);
+    assert.strictEqual(asyncRes.payload.inProgress, true);
 
     // Cached endpoint contract (frontend read path)
     accountingRevenueCacheService.getLatestRevenueCache = async () => ({
@@ -112,6 +122,34 @@ async function run() {
       { buyer: "DigiPeak", conversionAmount: "5" },
       { buyer: "FallbackAffiliate", conversionAmount: "7" },
       { buyer: "48793", conversionAmount: "3" },
+    ]);
+
+    // Retriever fallback: if per-company apiKey fails, retry with env RETREAVER_API_KEY.
+    process.env.RETREAVER_API_KEY = "env-good-key";
+    axios.get = async (_url, requestOptions = {}) => {
+      const key = requestOptions.params?.api_key;
+      const page = requestOptions.params?.page;
+      if (key === "bad-key") {
+        const err = new Error("Unauthorized");
+        err.response = { status: 401, data: { error: "Unauthorized" } };
+        throw err;
+      }
+      if (page !== 1) return { data: [] };
+      return {
+        data: [{ call: { afid: "MEDIB006", payout: "260" } }],
+      };
+    };
+    const retrieverFallback = await accountingService.getRevenueFromRetreaverDay({
+      accountID: "225612",
+      apiKey: "bad-key",
+      reportStart: "2026-05-04T04:00:00Z",
+      reportEnd: "2026-05-05T03:59:59Z",
+      baseUrl: "https://api.retreaver.com",
+    });
+    assert.strictEqual(retrieverFallback.success, true);
+    assert.strictEqual(retrieverFallback.revenue, 260);
+    assert.deepStrictEqual(retrieverFallback.records, [
+      { buyer: "MEDIB006", conversionAmount: "260" },
     ]);
 
     // PGNM comparison parity: base PGNM rows enriched from matched buyer platform.
@@ -217,6 +255,7 @@ async function run() {
     accountingRevenueCacheService.getLatestRevenueCache = originalGetLatestRevenueCache;
     axios.get = originalAxiosGet;
     axios.post = originalAxiosPost;
+    process.env.RETREAVER_API_KEY = originalRetrieverEnvKey;
   }
 }
 

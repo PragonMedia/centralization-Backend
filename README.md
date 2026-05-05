@@ -18,7 +18,10 @@ frontend code - cd /var/www/paragon-fe && sudo -u www-data git fetch origin && s
 ## Accounting Platform Notes
 
 - Company records support `platform`: `ringba` or `retriever` (default `ringba`).
-- Revenue refresh endpoint is `POST /api/v1/accounting/revenue` (manual cache rebuild).
+- Revenue refresh endpoint is `POST /api/v1/accounting/revenue`.
+  - Default behavior starts a background refresh and returns immediately (`202`) to avoid long request hangs.
+  - To wait for completion in one request, pass `?wait=true`.
+  - Refresh job status endpoint: `GET /api/v1/accounting/revenue/refresh-status`.
 - Fast frontend read endpoint is `GET /api/v1/accounting/revenue/cached`.
 - PGNM Ringba buyer dropdown (live Insights, not Mongo): `GET /api/v1/accounting/ringba/pgnm/buyers`
   - Optional `?days=30` (default 30, max 120 rolling UTC calendar days ending today), or `?start=YYYY-MM-DD&end=YYYY-MM-DD` (max 120-day span).

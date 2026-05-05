@@ -415,7 +415,8 @@ async function getRevenueFromRetreaverDay(options = {}) {
     baseUrl,
   } = options;
 
-  const keyToUse = (apiKey && String(apiKey).trim()) || RETREAVER_API_KEY;
+  const envRetreaverKey = (process.env.RETREAVER_API_KEY || RETREAVER_API_KEY || "").trim();
+  const keyToUse = (apiKey && String(apiKey).trim()) || envRetreaverKey;
   if (!accountID || !keyToUse) {
     return {
       success: false,
@@ -479,6 +480,18 @@ async function getRevenueFromRetreaverDay(options = {}) {
       period: { reportStart, reportEnd },
     };
   } catch (error) {
+    const providedKey = (apiKey && String(apiKey).trim()) || "";
+    const fallbackKey = envRetreaverKey;
+    const canRetryWithEnv =
+      Boolean(providedKey) &&
+      Boolean(fallbackKey) &&
+      providedKey !== fallbackKey;
+    if (canRetryWithEnv) {
+      return getRevenueFromRetreaverDay({
+        ...options,
+        apiKey: fallbackKey,
+      });
+    }
     const status = error.response?.status;
     const data = error.response?.data;
     const message = data?.message ?? data?.error ?? error.message;

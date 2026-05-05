@@ -46,7 +46,11 @@ async function buildRevenuePayloadForWindow({ startDate, endDate, endDateTimeIso
       platform:
         (typeof c.platform === "string" ? c.platform.trim().toLowerCase() : "") ||
         "ringba",
-      apiToken: (c.apiToken && c.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "",
+      apiToken:
+        (c.apiToken && c.apiToken.trim()) ||
+        (platform === "retriever"
+          ? (process.env.RETREAVER_API_KEY || "").trim()
+          : RINGBA_CONFIG.API_KEY || ""),
       normalizedName: accountingService.normalizeBuyerName(c.companyName),
     }));
 
@@ -56,13 +60,14 @@ async function buildRevenuePayloadForWindow({ startDate, endDate, endDateTimeIso
       (typeof company.platform === "string"
         ? company.platform.trim().toLowerCase()
         : "") || "ringba";
-    const apiToken = (company.apiToken && company.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "";
+    const apiToken =
+      (company.apiToken && company.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "";
 
     let result;
     if (platform === "retriever") {
       result = await accountingService.getRevenueRangeFromRetriever({
         accountID: company.accountID,
-        apiKey: company.apiToken,
+        apiKey: (company.apiToken && company.apiToken.trim()) || "",
         start: startDate,
         end: endDate,
         includeTodayLive: true,

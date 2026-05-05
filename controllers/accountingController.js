@@ -7,6 +7,14 @@ const accountingService = require("../services/accountingService");
 const RINGBA_CONFIG = require("../config/ringbaApi");
 const accountingRevenueCacheService = require("../services/accountingRevenueCacheService");
 const SUPPORTED_PLATFORMS = ["ringba", "retriever"];
+const revenueRefreshJob = {
+  inProgress: false,
+  startedAt: null,
+  finishedAt: null,
+  lastSuccessAt: null,
+  lastError: null,
+  lastTrigger: null,
+};
 
 exports.getRetrieverTestData = async (req, res) => {
   try {
@@ -29,7 +37,52 @@ exports.getRetrieverTestData = async (req, res) => {
  * Rebuilds 2-month rolling accounting data and stores a single latest snapshot.
  */
 exports.getRevenue = async (req, res) => {
+  const waitRaw =
+    (typeof req.query?.wait === "string" ? req.query.wait : "") ||
+    (typeof req.body?.wait === "string" ? req.body.wait : "");
+  const waitForCompletion = ["1", "true", "yes"].includes(
+    String(waitRaw || "").trim().toLowerCase()
+  );
   try {
+    if (!waitForCompletion) {
+      if (revenueRefreshJob.inProgress) {
+        return res.status(202).json({
+          success: true,
+          message: "Accounting revenue cache refresh already in progress.",
+          inProgress: true,
+          startedAt: revenueRefreshJob.startedAt,
+          lastSuccessAt: revenueRefreshJob.lastSuccessAt,
+          lastError: revenueRefreshJob.lastError,
+        });
+      }
+      revenueRefreshJob.inProgress = true;
+      revenueRefreshJob.startedAt = new Date().toISOString();
+      revenueRefreshJob.finishedAt = null;
+      revenueRefreshJob.lastError = null;
+      revenueRefreshJob.lastTrigger = "manual_endpoint_async";
+      (async () => {
+        try {
+          await accountingRevenueCacheService.refreshRevenueCache({
+            trigger: "manual_endpoint_async",
+          });
+          revenueRefreshJob.lastSuccessAt = new Date().toISOString();
+        } catch (error) {
+          revenueRefreshJob.lastError = error?.message || "Unknown refresh error.";
+          console.error("Accounting getRevenue async refresh error:", error);
+        } finally {
+          revenueRefreshJob.inProgress = false;
+          revenueRefreshJob.finishedAt = new Date().toISOString();
+        }
+      })();
+      return res.status(202).json({
+        success: true,
+        message:
+          "Accounting revenue cache refresh started in background. Poll GET /api/v1/accounting/revenue/refresh-status.",
+        inProgress: true,
+        startedAt: revenueRefreshJob.startedAt,
+      });
+    }
+
     const refreshed = await accountingRevenueCacheService.refreshRevenueCache({
       trigger: "manual_endpoint",
     });
@@ -48,6 +101,22 @@ exports.getRevenue = async (req, res) => {
       error: "Failed to fetch revenue.",
     });
   }
+};
+
+/**
+ * GET /api/v1/accounting/revenue/refresh-status
+ * Reports manual refresh background job state.
+ */
+exports.getRevenueRefreshStatus = async (_req, res) => {
+  return res.status(200).json({
+    success: true,
+    inProgress: revenueRefreshJob.inProgress,
+    startedAt: revenueRefreshJob.startedAt,
+    finishedAt: revenueRefreshJob.finishedAt,
+    lastSuccessAt: revenueRefreshJob.lastSuccessAt,
+    lastError: revenueRefreshJob.lastError,
+    lastTrigger: revenueRefreshJob.lastTrigger,
+  });
 };
 
 /**
@@ -237,16 +306,22 @@ exports.createCompany = async (req, res) => {
         error: "accountID is required and must be a non-empty string.",
       });
     }
-    // Use body apiToken if provided and non-empty; otherwise use single shared API key from env
+    // Use body apiToken if provided and non-empty; otherwise use platform-specific shared API key from env.
+    const fallbackTokenFromEnv =
+      normalizedPlatform === "retriever"
+        ? (process.env.RETREAVER_API_KEY || "").trim()
+        : (RINGBA_CONFIG.API_KEY || "");
     const apiTokenToStore =
       apiToken && typeof apiToken === "string" && apiToken.trim()
         ? apiToken.trim()
-        : (RINGBA_CONFIG.API_KEY || "");
+        : fallbackTokenFromEnv;
     if (!apiTokenToStore) {
       return res.status(400).json({
         success: false,
         error:
-          "apiToken was not provided and server has no RINGBA_API_KEY or RINGBA_API_TOKEN set. Set one in .env to auto-insert for new buyers.",
+          normalizedPlatform === "retriever"
+            ? "apiToken was not provided and server has no RETREAVER_API_KEY set. Set one in .env to auto-insert for Retriever buyers."
+            : "apiToken was not provided and server has no RINGBA_API_KEY or RINGBA_API_TOKEN set. Set one in .env to auto-insert for Ringba buyers.",
       });
     }
     const existing = await Company.findOne({
