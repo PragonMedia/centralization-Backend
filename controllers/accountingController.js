@@ -8,6 +8,7 @@ const RINGBA_CONFIG = require("../config/ringbaApi");
 const accountingRevenueCacheService = require("../services/accountingRevenueCacheService");
 const callgridReportService = require("../services/callgridReportService");
 const callgridStatsReportService = require("../services/callgridStatsReportService");
+const callgridOrgResolveService = require("../services/callgridOrgResolveService");
 const SUPPORTED_PLATFORMS = ["ringba", "retriever", "callgrid"];
 
 /** Map Company docs (platform=callgrid) to stats/calls buyer rows. */
@@ -45,6 +46,43 @@ exports.getRetrieverTestData = async (req, res) => {
     return res.status(500).json({
       success: false,
       error: "Failed to fetch Retriever test data.",
+    });
+  }
+};
+
+/**
+ * POST /api/v1/accounting/callgrid/resolve-org
+ * Body: { apiToken }. Resolves CallGrid organizationId(s) for a per-org API key.
+ * Used by the accounting UI when CORS blocks direct browser calls to CallGrid.
+ */
+exports.resolveCallgridOrg = async (req, res) => {
+  try {
+    const apiToken =
+      typeof req.body?.apiToken === "string"
+        ? req.body.apiToken.trim()
+        : typeof req.body?.apiKey === "string"
+          ? req.body.apiKey.trim()
+          : "";
+
+    if (!apiToken) {
+      return res.status(400).json({
+        success: false,
+        error: "apiToken is required (CallGrid API key for this organization).",
+        organizations: [],
+      });
+    }
+
+    const result = await callgridOrgResolveService.resolveCallgridOrganization({
+      apiToken,
+    });
+
+    return res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error("Accounting resolveCallgridOrg error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to resolve CallGrid organization.",
+      organizations: [],
     });
   }
 };

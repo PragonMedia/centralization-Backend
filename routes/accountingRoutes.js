@@ -11,6 +11,7 @@ router.get("/revenue/refresh-status", accountingController.getRevenueRefreshStat
 router.get("/revenue/cached", accountingController.getCachedRevenue);
 router.get("/ringba/pgnm/buyers", accountingController.getPgnmRingbaBuyers);
 router.get("/retriever/test-data", accountingController.getRetrieverTestData);
+router.post("/callgrid/resolve-org", accountingController.resolveCallgridOrg);
 router.get("/callgrid/test-data", accountingController.getCallgridTestData);
 router.get("/companies", accountingController.listCompanies);
 router.post("/companies", accountingController.createCompany);

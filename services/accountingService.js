@@ -4,6 +4,7 @@
  */
 const axios = require("axios");
 const RINGBA_API_CONFIG = require("../config/ringbaApi");
+const { fetchDashboardBuyersStatsReport, fetchCallgridPayoutForDay } = require("./callgridStatsReportService");
 
 const DEFAULT_BASE_URL = (RINGBA_API_CONFIG.BASE_URL || "https://api.ringba.com").replace(/\/$/, "");
 const RETREAVER_BASE_URL = (process.env.RETREAVER_API_BASE_URL || "https://api.retreaver.com").replace(/\/$/, "");
@@ -236,6 +237,22 @@ async function getBuyerComparisonRevenueForDay(options = {}) {
     });
     return retrieverResult.success && retrieverResult.revenue != null
       ? String(retrieverResult.revenue)
+      : null;
+  }
+
+  if (platform === "callgrid") {
+    const dayIso =
+      typeof reportStart === "string" && reportStart.length >= 10
+        ? reportStart.slice(0, 10)
+        : "";
+    const callgridResult = await fetchCallgridPayoutForDay({
+      organizationId: buyerCompany.accountID,
+      apiKey: buyerCompany.apiToken,
+      buyer: buyerCompany.companyName,
+      dayIso,
+    });
+    return callgridResult.success && callgridResult.revenue != null
+      ? String(callgridResult.revenue)
       : null;
   }
 
@@ -577,6 +594,88 @@ async function getRevenueRangeFromRetriever(options = {}) {
 }
 
 /**
+ * CallGrid adapter: daily payout via POST /api/reports/stats (same revenueByDay shape as Retriever).
+ */
+async function getRevenueRangeFromCallgrid(options = {}) {
+  const {
+    accountID,
+    apiKey,
+    companyName,
+    start,
+    end,
+    includeTodayLive = false,
+  } = options;
+  if (!accountID || !apiKey) {
+    return {
+      success: false,
+      message: "Missing accountID (organizationId) or apiToken for CallGrid.",
+    };
+  }
+  const days = getDaysInRangeUTC(start, end);
+  if (!days || days.length === 0) {
+    return {
+      success: false,
+      message: "Invalid or empty date range. Use start and end as YYYY-MM-DD with end >= start.",
+    };
+  }
+
+  const completedDays = days.filter((d) => !(d.isToday && !includeTodayLive));
+  const payoutByIso = new Map();
+
+  if (completedDays.length > 0) {
+    const rangeStart = `${completedDays[0].date.getUTCFullYear()}-${String(completedDays[0].date.getUTCMonth() + 1).padStart(2, "0")}-${String(completedDays[0].date.getUTCDate()).padStart(2, "0")}`;
+    const last = completedDays[completedDays.length - 1].date;
+    const rangeEnd = `${last.getUTCFullYear()}-${String(last.getUTCMonth() + 1).padStart(2, "0")}-${String(last.getUTCDate()).padStart(2, "0")}`;
+
+    const stats = await fetchDashboardBuyersStatsReport({
+      buyers: [{ buyer: companyName || accountID, organizationId: accountID, apiKey }],
+      rangeStart,
+      rangeEnd,
+      requestDelayMs: Math.max(0, parseInt(process.env.CALLGRID_CACHE_REQUEST_DELAY_MS || "200", 10) || 200),
+      minimal: false,
+    });
+
+    const buyerRow = stats.buyers && stats.buyers[0];
+    if (buyerRow && Array.isArray(buyerRow.revenue)) {
+      for (const row of buyerRow.revenue) {
+        if (row.dateIso && row.totalPayout != null && !row.error) {
+          payoutByIso.set(row.dateIso, row.totalPayout);
+        }
+      }
+    } else if (!stats.success) {
+      console.warn("Accounting: CallGrid range failed", {
+        accountID,
+        message: stats.error,
+      });
+    }
+  }
+
+  const revenueByDay = [];
+  for (const { date, dayLabel, isToday } of days) {
+    if (isToday && !includeTodayLive) {
+      revenueByDay.push({ day: dayLabel, revenue: "", records: [] });
+      continue;
+    }
+    const iso = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+    let revenue = payoutByIso.has(iso) ? payoutByIso.get(iso) : "";
+
+    if (isToday && includeTodayLive && !payoutByIso.has(iso)) {
+      const live = await fetchCallgridPayoutForDay({
+        organizationId: accountID,
+        apiKey,
+        buyer: companyName,
+        dayIso: iso,
+      });
+      revenue = live.success && live.revenue != null ? live.revenue : "";
+    }
+
+    revenueByDay.push({ day: dayLabel, revenue, records: [] });
+  }
+
+  return { success: true, revenueByDay };
+}
+
+/**
  * Public payload for Retriever GET test endpoint (live Retreaver-backed).
  */
 async function getRetrieverTestData(options = {}) {
@@ -793,6 +892,7 @@ module.exports = {
   getRevenueWeekFromRingba,
   getRevenueRangeFromRingba,
   getRevenueRangeFromRetriever,
+  getRevenueRangeFromCallgrid,
   getRevenueFromRetreaverDay,
   getRetrieverTestData,
   normalizeBuyerName,

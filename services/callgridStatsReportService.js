@@ -336,7 +336,40 @@ async function fetchDashboardBuyersStatsReport(options = {}) {
   };
 }
 
+/**
+ * Single-day payout for accounting / PGNM buyer comparison.
+ */
+async function fetchCallgridPayoutForDay(options = {}) {
+  const organizationId = String(options.organizationId || options.accountID || "").trim();
+  const apiKey = String(options.apiKey || options.apiToken || "").trim();
+  const dayIso = String(options.dayIso || options.dateIso || "").trim();
+  if (!organizationId || !apiKey || !dayIso) {
+    return { success: false, error: "Missing organizationId, apiKey, or dayIso" };
+  }
+
+  const result = await fetchDashboardBuyersStatsReport({
+    buyers: [{ buyer: options.buyer || organizationId, organizationId, apiKey }],
+    rangeStart: dayIso,
+    rangeEnd: dayIso,
+    reportTimeZone: options.reportTimeZone,
+    requestDelayMs: options.requestDelayMs ?? 0,
+    minimal: false,
+  });
+
+  const buyer = result.buyers && result.buyers[0];
+  const day = buyer?.revenue?.[0];
+  if (!result.success || !buyer) {
+    return { success: false, error: result.error || "CallGrid stats failed" };
+  }
+  if (day?.error) {
+    return { success: false, error: day.error };
+  }
+  const revenue = day?.totalPayout != null ? roundMoney2(day.totalPayout) : 0;
+  return { success: true, revenue };
+}
+
 module.exports = {
   fetchDashboardBuyersStatsReport,
+  fetchCallgridPayoutForDay,
   normalizeBuyers,
 };

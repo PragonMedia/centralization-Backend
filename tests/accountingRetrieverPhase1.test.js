@@ -77,6 +77,22 @@ async function run() {
     assert.strictEqual(Array.isArray(cachedRes.payload.companies), true);
     assert.strictEqual(cachedRes.payload.cacheMeta.trigger, "scheduler_1am_et");
 
+    // CallGrid resolve-org endpoint
+    const callgridOrgResolveService = require("../services/callgridOrgResolveService");
+    const originalResolveOrg = callgridOrgResolveService.resolveCallgridOrganization;
+    callgridOrgResolveService.resolveCallgridOrganization = async () => ({
+      success: true,
+      organizations: [{ organizationId: "org_test_123", label: "Test Org" }],
+      method: "GET /api/call",
+    });
+    const resolveReq = { body: { apiToken: "test-key" } };
+    const resolveRes = createRes();
+    await accountingController.resolveCallgridOrg(resolveReq, resolveRes);
+    assert.strictEqual(resolveRes.statusCode, 200);
+    assert.strictEqual(resolveRes.payload.success, true);
+    assert.strictEqual(resolveRes.payload.organizations[0].organizationId, "org_test_123");
+    callgridOrgResolveService.resolveCallgridOrganization = originalResolveOrg;
+
     // Retriever test endpoint response shape
     accountingService.getRetrieverTestData = async () => ({
       success: true,

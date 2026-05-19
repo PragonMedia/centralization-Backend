@@ -29,7 +29,7 @@ UI validation script: `node scripts/compare-roku-spend-ui.js --start 2026-05-04 
 
 ## Accounting Platform Notes
 
-- Company records support `platform`: `ringba`, `retriever`, or `callgrid` (default `ringba`).
+- Company records support `platform`: `ringba`, `retriever`, or `callgrid` (default `ringba`). CallGrid companies need `apiToken` (org API key) and `accountID` (CallGrid `organizationId`).
 - Revenue refresh endpoint is `POST /api/v1/accounting/revenue`.
   - Default behavior starts a background refresh and returns immediately (`202`) to avoid long request hangs.
   - To wait for completion in one request, pass `?wait=true`.
@@ -41,7 +41,8 @@ UI validation script: `node scripts/compare-roku-spend-ui.js --start 2026-05-04 
   - `ringba` -> existing Ringba Insights flow
   - `retriever` -> live Retreaver calls API (`/calls.json`) using company `accountID` as `company_id` and summing `payout` per day
     - `records[].buyer` is grouped by publisher label (`afid`) first, with fallback to `affiliate_id`, then existing ID fields if needed
-    - PGNM (Ringba base) buyer comparison now uses matched buyer company `platform`: Ringba buyers compare via Ringba, Retriever buyers compare via Retreaver
+  - `callgrid` -> CallGrid `POST /api/reports/stats` per day using company `apiToken` and `accountID` as `organizationId` (`footerTotals.total_payout`)
+    - PGNM (Ringba base) buyer comparison uses matched buyer company `platform`: Ringba, Retriever, or CallGrid buyers compare via their own platform for `buyerConversionAmount`
 - Cache architecture:
   - Refresh window is rolling 2 months (`start = now - 2 months`, `end = now`).
   - Scheduler runs daily at `1:00 AM America/New_York`.
@@ -53,8 +54,9 @@ UI validation script: `node scripts/compare-roku-spend-ui.js --start 2026-05-04 
   - Returns live test payload (`source`, `period`, `records`, `revenue`) from Retreaver.
 - CallGrid buyers (like Ringba/Retriever — API key on company record):
   - Add company: `POST /api/v1/accounting/companies` with `platform: "callgrid"`, `accountID` = CallGrid `organizationId`, `apiToken` = CallGrid API key for that org.
+  - Resolve `organizationId` from API key: `POST /api/v1/accounting/callgrid/resolve-org` with `{ "apiToken": "..." }` (or use [`client/callgridResolveOrganization.js`](client/callgridResolveOrganization.js) in the portal — see [`docs/callgrid-org-resolve.md`](docs/callgrid-org-resolve.md)).
   - `GET /api/v1/accounting/callgrid/test-data` — loads all `platform=callgrid` companies; optional `?accountID=<orgId>`, `?rangeStart=`, `?rangeEnd=`, `?format=full`.
-  - CLI: `node test-callgrid-buyers.js` (requires `MONGO_URI` and CallGrid companies in DB).
+  - CLI: `node test-callgrid-buyers.js` (requires `MONGO_URI` and CallGrid companies in DB); `node test-callgrid-resolve-org.js` to test org lookup.
 
 ### Example Retriever Test Response
 

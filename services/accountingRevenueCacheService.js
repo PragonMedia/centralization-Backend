@@ -18,6 +18,14 @@ function getRollingTwoMonthWindow() {
   };
 }
 
+function resolveCompanyApiToken(company, platform) {
+  const token = (company.apiToken && company.apiToken.trim()) || "";
+  if (token) return token;
+  if (platform === "retriever") return (process.env.RETREAVER_API_KEY || "").trim();
+  if (platform === "ringba") return RINGBA_CONFIG.API_KEY || "";
+  return "";
+}
+
 async function buildRevenuePayloadForWindow({ startDate, endDate, endDateTimeIso }) {
   const companies = await Company.find().lean();
   if (!companies.length) {
@@ -35,24 +43,23 @@ async function buildRevenuePayloadForWindow({ startDate, endDate, endDateTimeIso
         (typeof c.platform === "string" ? c.platform.trim().toLowerCase() : "") ||
         "ringba";
       return (
-        (platform === "ringba" || platform === "retriever") &&
+        (platform === "ringba" || platform === "retriever" || platform === "callgrid") &&
         c.companyName &&
         c.accountID
       );
     })
-    .map((c) => ({
-      companyName: c.companyName,
-      accountID: c.accountID,
-      platform:
+    .map((c) => {
+      const platform =
         (typeof c.platform === "string" ? c.platform.trim().toLowerCase() : "") ||
-        "ringba",
-      apiToken:
-        (c.apiToken && c.apiToken.trim()) ||
-        (platform === "retriever"
-          ? (process.env.RETREAVER_API_KEY || "").trim()
-          : RINGBA_CONFIG.API_KEY || ""),
-      normalizedName: accountingService.normalizeBuyerName(c.companyName),
-    }));
+        "ringba";
+      return {
+        companyName: c.companyName,
+        accountID: c.accountID,
+        platform,
+        apiToken: resolveCompanyApiToken(c, platform),
+        normalizedName: accountingService.normalizeBuyerName(c.companyName),
+      };
+    });
 
   const companiesWithRevenue = [];
   for (const company of companies) {
@@ -60,19 +67,34 @@ async function buildRevenuePayloadForWindow({ startDate, endDate, endDateTimeIso
       (typeof company.platform === "string"
         ? company.platform.trim().toLowerCase()
         : "") || "ringba";
-    const apiToken =
-      (company.apiToken && company.apiToken.trim()) || RINGBA_CONFIG.API_KEY || "";
+    const apiToken = resolveCompanyApiToken(company, platform);
 
     let result;
     if (platform === "retriever") {
       result = await accountingService.getRevenueRangeFromRetriever({
         accountID: company.accountID,
-        apiKey: (company.apiToken && company.apiToken.trim()) || "",
+        apiKey,
         start: startDate,
         end: endDate,
         includeTodayLive: true,
         currentReportEnd: endDateTimeIso,
       });
+    } else if (platform === "callgrid") {
+      if (!apiToken) {
+        result = {
+          success: false,
+          message: "Missing apiToken for CallGrid company.",
+        };
+      } else {
+        result = await accountingService.getRevenueRangeFromCallgrid({
+          accountID: company.accountID,
+          apiKey: apiToken,
+          companyName: company.companyName,
+          start: startDate,
+          end: endDate,
+          includeTodayLive: true,
+        });
+      }
     } else {
       const isPGNMBase =
         accountingService.normalizeBuyerName(company.companyName) === "pgnm";
@@ -137,4 +159,3 @@ module.exports = {
   getLatestRevenueCache,
   getRollingTwoMonthWindow,
 };
-
