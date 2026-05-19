@@ -6,7 +6,25 @@ const Company = require("../models/companyModel");
 const accountingService = require("../services/accountingService");
 const RINGBA_CONFIG = require("../config/ringbaApi");
 const accountingRevenueCacheService = require("../services/accountingRevenueCacheService");
-const SUPPORTED_PLATFORMS = ["ringba", "retriever"];
+const callgridReportService = require("../services/callgridReportService");
+const callgridStatsReportService = require("../services/callgridStatsReportService");
+const SUPPORTED_PLATFORMS = ["ringba", "retriever", "callgrid"];
+
+/** Map Company docs (platform=callgrid) to stats/calls buyer rows. */
+function mapCallgridCompaniesToBuyers(companies) {
+  return companies.map((c) => ({
+    buyer: c.companyName,
+    organizationId: c.accountID,
+    apiKey: (c.apiToken && String(c.apiToken).trim()) || "",
+  }));
+}
+
+async function loadCallgridBuyersFromDb(accountIDFilter) {
+  const query = { platform: "callgrid" };
+  if (accountIDFilter) query.accountID = accountIDFilter;
+  const companies = await Company.find(query).lean();
+  return mapCallgridCompaniesToBuyers(companies);
+}
 const revenueRefreshJob = {
   inProgress: false,
   startedAt: null,
@@ -27,6 +45,93 @@ exports.getRetrieverTestData = async (req, res) => {
     return res.status(500).json({
       success: false,
       error: "Failed to fetch Retriever test data.",
+    });
+  }
+};
+
+/**
+ * GET /api/v1/accounting/callgrid/test-data
+ * Loads buyers from companies with platform=callgrid (apiToken + accountID = organizationId).
+ * Query: rangeStart, rangeEnd, accountID (optional filter), format=full, source=calls.
+ */
+exports.getCallgridTestData = async (req, res) => {
+  try {
+    const accountIDFilter =
+      typeof req.query?.accountID === "string" ? req.query.accountID.trim() : "";
+    const buyers = await loadCallgridBuyersFromDb(accountIDFilter || undefined);
+    if (!buyers.length) {
+      return res.status(404).json({
+        success: false,
+        source: "callgrid_stats",
+        error: accountIDFilter
+          ? `No CallGrid company found for accountID ${accountIDFilter}. Add via POST /api/v1/accounting/companies with platform callgrid.`
+          : "No CallGrid companies found. Add buyers via POST /api/v1/accounting/companies with platform callgrid (accountID = CallGrid organizationId, apiToken = API key).",
+      });
+    }
+
+    const rangeStart = typeof req.query?.rangeStart === "string" ? req.query.rangeStart.trim() : "";
+    const rangeEnd = typeof req.query?.rangeEnd === "string" ? req.query.rangeEnd.trim() : "";
+    const source = String(req.query?.source || "stats").trim().toLowerCase();
+    const reportOpts = {
+      buyers,
+      rangeStart: rangeStart || undefined,
+      rangeEnd: rangeEnd || undefined,
+    };
+
+    if (source === "calls" || source === "legacy") {
+      const firstPageOnly = ["1", "true", "yes"].includes(
+        String(req.query?.firstPageOnly || "").trim().toLowerCase()
+      );
+      const maxPages = Math.max(1, parseInt(String(req.query?.maxPages || "300"), 10) || 300);
+      const maxItems = Math.max(1, parseInt(String(req.query?.maxItems || "100"), 10) || 100);
+      const template = typeof req.query?.template === "string" ? req.query.template.trim() : "";
+      const uiVendors = typeof req.query?.uiVendors === "string" ? req.query.uiVendors.trim() : "";
+
+      const payload = await callgridReportService.fetchBuyersByDayReport({
+        ...reportOpts,
+        firstPageOnly,
+        maxPages,
+        maxItems,
+        groupBy: typeof req.query?.groupBy === "string" ? req.query.groupBy.trim() : "",
+        template: template || undefined,
+        uiVendors: uiVendors || undefined,
+      });
+      return res.status(payload.success ? 200 : 400).json(payload);
+    }
+
+    const reportTz =
+      typeof req.query?.reportTimeZone === "string" && req.query.reportTimeZone.trim()
+        ? req.query.reportTimeZone.trim()
+        : undefined;
+    const pivot = typeof req.query?.pivot === "string" && req.query.pivot.trim() ? req.query.pivot.trim() : undefined;
+    const requestDelayMs = Math.max(
+      0,
+      parseInt(String(req.query?.requestDelayMs || "200"), 10) || 200
+    );
+    const format = String(req.query?.format || "").trim().toLowerCase();
+    const minimal = !["full", "verbose", "1", "true", "yes"].includes(format);
+
+    let statsMaxItems;
+    if (req.query?.maxItems != null && String(req.query.maxItems).trim() !== "") {
+      const n = parseInt(String(req.query.maxItems), 10);
+      if (Number.isFinite(n) && n >= 1) statsMaxItems = n;
+    }
+
+    const payload = await callgridStatsReportService.fetchDashboardBuyersStatsReport({
+      ...reportOpts,
+      reportTimeZone: reportTz,
+      pivot,
+      requestDelayMs,
+      minimal,
+      ...(statsMaxItems != null ? { maxItems: statsMaxItems } : {}),
+    });
+    return res.status(payload.success ? 200 : 400).json(payload);
+  } catch (err) {
+    console.error("Accounting getCallgridTestData error:", err);
+    return res.status(500).json({
+      success: false,
+      source: "callgrid_stats",
+      error: "Failed to fetch CallGrid test data.",
     });
   }
 };
@@ -306,23 +411,34 @@ exports.createCompany = async (req, res) => {
         error: "accountID is required and must be a non-empty string.",
       });
     }
-    // Use body apiToken if provided and non-empty; otherwise use platform-specific shared API key from env.
-    const fallbackTokenFromEnv =
-      normalizedPlatform === "retriever"
-        ? (process.env.RETREAVER_API_KEY || "").trim()
-        : (RINGBA_CONFIG.API_KEY || "");
-    const apiTokenToStore =
-      apiToken && typeof apiToken === "string" && apiToken.trim()
-        ? apiToken.trim()
-        : fallbackTokenFromEnv;
-    if (!apiTokenToStore) {
-      return res.status(400).json({
-        success: false,
-        error:
-          normalizedPlatform === "retriever"
-            ? "apiToken was not provided and server has no RETREAVER_API_KEY set. Set one in .env to auto-insert for Retriever buyers."
-            : "apiToken was not provided and server has no RINGBA_API_KEY or RINGBA_API_TOKEN set. Set one in .env to auto-insert for Ringba buyers.",
-      });
+    let apiTokenToStore = "";
+    if (normalizedPlatform === "callgrid") {
+      if (!apiToken || typeof apiToken !== "string" || !apiToken.trim()) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "apiToken is required for platform callgrid (CallGrid API key for this organization). accountID should be the CallGrid organizationId.",
+        });
+      }
+      apiTokenToStore = apiToken.trim();
+    } else {
+      const fallbackTokenFromEnv =
+        normalizedPlatform === "retriever"
+          ? (process.env.RETREAVER_API_KEY || "").trim()
+          : (RINGBA_CONFIG.API_KEY || "");
+      apiTokenToStore =
+        apiToken && typeof apiToken === "string" && apiToken.trim()
+          ? apiToken.trim()
+          : fallbackTokenFromEnv;
+      if (!apiTokenToStore) {
+        return res.status(400).json({
+          success: false,
+          error:
+            normalizedPlatform === "retriever"
+              ? "apiToken was not provided and server has no RETREAVER_API_KEY set. Set one in .env to auto-insert for Retriever buyers."
+              : "apiToken was not provided and server has no RINGBA_API_KEY or RINGBA_API_TOKEN set. Set one in .env to auto-insert for Ringba buyers.",
+        });
+      }
     }
     const existing = await Company.findOne({
       accountID: accountID.trim(),
@@ -452,6 +568,26 @@ exports.updateCompany = async (req, res) => {
       }
       updates.platform = normalizedPlatform;
     }
+
+    const effectivePlatform = (
+      updates.platform ||
+      company.platform ||
+      "ringba"
+    )
+      .trim()
+      .toLowerCase();
+    if (effectivePlatform === "callgrid") {
+      const tokenAfter =
+        updates.apiToken !== undefined ? updates.apiToken : company.apiToken || "";
+      if (!tokenAfter || !String(tokenAfter).trim()) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "apiToken is required for platform callgrid. Provide CallGrid API key in request body.",
+        });
+      }
+    }
+
     if (Object.keys(updates).length === 0) {
       return res.status(200).json({
         success: true,

@@ -33,7 +33,7 @@ const companySchema = new mongoose.Schema(
       type: String,
       required: false,
       trim: true,
-      enum: ["ringba", "retriever"],
+      enum: ["ringba", "retriever", "callgrid"],
       default: "ringba",
     },
   },

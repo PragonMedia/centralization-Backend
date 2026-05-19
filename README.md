@@ -15,9 +15,21 @@ sudo git pull origin main
 Sweeps - cd /var/www/templates/sweep && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/sweep && sudo chmod -R 755 /var/www/templates/sweep
 frontend code - cd /var/www/paragon-fe && sudo -u www-data git fetch origin && sudo -u www-data git reset --hard origin/master && sudo npm install && sudo npm run build && sudo chown -R www-data:www-data /var/www/paragon-fe && sudo chmod -R 755 /var/www/paragon-fe
 
+## Roku Ads API (ad accounts + spend)
+
+Separate from Ringba **Conversions API** (`POST /ringba/roku/conversion`). Uses Roku Ads API beta at `https://api.ads.roku.com/v1`.
+
+- `GET /api/v1/roku/ad-accounts` — list ad accounts
+- `GET /api/v1/roku/organizations` — list orgs (optional `?includeAccounts=false`)
+- `GET /api/v1/roku/spend?start=YYYY-MM-DD&end=YYYY-MM-DD` — async report → spend totals (`&accountUid=` optional)
+
+Env: `ROKU_ADS_CLIENT_ID`, `ROKU_ADS_CLIENT_SECRET`, `ROKU_ADS_REFRESH_TOKEN` (see `.env.example`). API reference: `docs/roku-ads-api-reference.md`.
+
+UI validation script: `node scripts/compare-roku-spend-ui.js --start 2026-05-04 --end 2026-05-08`
+
 ## Accounting Platform Notes
 
-- Company records support `platform`: `ringba` or `retriever` (default `ringba`).
+- Company records support `platform`: `ringba`, `retriever`, or `callgrid` (default `ringba`).
 - Revenue refresh endpoint is `POST /api/v1/accounting/revenue`.
   - Default behavior starts a background refresh and returns immediately (`202`) to avoid long request hangs.
   - To wait for completion in one request, pass `?wait=true`.
@@ -39,6 +51,10 @@ frontend code - cd /var/www/paragon-fe && sudo -u www-data git fetch origin && s
   - `GET /api/v1/accounting/retriever/test-data`
   - Optional query: `?accountID=210309` (if omitted, uses `RETREAVER_COMPANY_ID` env)
   - Returns live test payload (`source`, `period`, `records`, `revenue`) from Retreaver.
+- CallGrid buyers (like Ringba/Retriever — API key on company record):
+  - Add company: `POST /api/v1/accounting/companies` with `platform: "callgrid"`, `accountID` = CallGrid `organizationId`, `apiToken` = CallGrid API key for that org.
+  - `GET /api/v1/accounting/callgrid/test-data` — loads all `platform=callgrid` companies; optional `?accountID=<orgId>`, `?rangeStart=`, `?rangeEnd=`, `?format=full`.
+  - CLI: `node test-callgrid-buyers.js` (requires `MONGO_URI` and CallGrid companies in DB).
 
 ### Example Retriever Test Response
 
