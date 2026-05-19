@@ -54,7 +54,7 @@ UI validation script: `node scripts/compare-roku-spend-ui.js --start 2026-05-04 
   - Returns live test payload (`source`, `period`, `records`, `revenue`) from Retreaver.
 - CallGrid buyers (like Ringba/Retriever — API key on company record):
   - Add company: `POST /api/v1/accounting/companies` with `platform: "callgrid"`, `accountID` = CallGrid `organizationId`, `apiToken` = CallGrid API key for that org.
-  - Resolve `organizationId` from API key: `POST /api/v1/accounting/callgrid/resolve-org` with `{ "apiToken": "..." }` (or use [`client/callgridResolveOrganization.js`](client/callgridResolveOrganization.js) in the portal — see [`docs/callgrid-org-resolve.md`](docs/callgrid-org-resolve.md)).
+  - Resolve `organizationId` from API key (frontend → backend proxy, no CORS): `POST /api/v1/accounting/callgrid/resolve-org` with `{ "apiToken": "..." }` — see [`docs/callgrid-org-resolve.md`](docs/callgrid-org-resolve.md).
   - `GET /api/v1/accounting/callgrid/test-data` — loads all `platform=callgrid` companies; optional `?accountID=<orgId>`, `?rangeStart=`, `?rangeEnd=`, `?format=full`.
   - CLI: `node test-callgrid-buyers.js` (requires `MONGO_URI` and CallGrid companies in DB); `node test-callgrid-resolve-org.js` to test org lookup.
 

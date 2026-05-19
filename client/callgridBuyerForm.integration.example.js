@@ -8,6 +8,7 @@
 //   try {
 //     const result = await resolveCallgridOrganization(apiToken, {
 //       accountingApiBaseUrl: import.meta.env.VITE_API_BASE_URL,
+//       proxyOnly: true, // default — browser never calls CallGrid directly
 //     });
 //     if (!result.success) {
 //       setState({ resolving: false, resolveError: result.error });

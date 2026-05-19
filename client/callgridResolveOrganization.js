@@ -1,6 +1,6 @@
 /**
- * Browser helper: resolve CallGrid organizationId from a per-org API key.
- * Tries CallGrid directly when CORS allows; otherwise uses Paragon BE proxy.
+ * Browser helper: resolve CallGrid organizationId via Paragon BE (no direct CallGrid calls).
+ * POST /api/v1/accounting/callgrid/resolve-org — server calls CallGrid; avoids CORS.
  *
  * @example
  * const result = await resolveCallgridOrganization(apiToken, {
@@ -173,9 +173,9 @@ async function resolveViaBackendProxy(apiToken, options = {}) {
  * @param {string} [options.callgridBaseUrl]
  * @param {string} [options.accountingApiBaseUrl] - Paragon BE origin for proxy fallback
  * @param {string} [options.reportTimeZone]
- * @param {boolean} [options.preferDirect=true] - try CallGrid from browser first
- * @param {boolean} [options.directOnly=false] - skip proxy (for testing CORS)
- * @param {boolean} [options.proxyOnly=false] - always use backend proxy
+ * @param {boolean} [options.proxyOnly=true] - use backend proxy (default; required for CORS)
+ * @param {boolean} [options.preferDirect=false] - if true, try CallGrid from browser first
+ * @param {boolean} [options.directOnly=false] - skip proxy (dev only; usually blocked by CORS)
  */
 async function resolveCallgridOrganization(apiToken, options = {}) {
   const token = trim(apiToken);
@@ -183,11 +183,11 @@ async function resolveCallgridOrganization(apiToken, options = {}) {
     return { success: false, organizations: [], error: "apiToken is required." };
   }
 
-  const proxyOnly = options.proxyOnly === true;
   const directOnly = options.directOnly === true;
-  const preferDirect = options.preferDirect !== false;
+  const preferDirect = options.preferDirect === true;
 
-  if (proxyOnly || !preferDirect) {
+  // Default: backend proxy only (CORS-safe). Opt in to direct with preferDirect/directOnly.
+  if (!preferDirect && !directOnly) {
     return resolveViaBackendProxy(token, options);
   }
 

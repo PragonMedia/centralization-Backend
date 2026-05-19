@@ -1,33 +1,18 @@
-# CallGrid organizationId lookup
+# CallGrid organizationId lookup (backend proxy)
 
-`Company.accountID` for `platform: "callgrid"` must be CallGrid **`organizationId`** (e.g. `cmfmvrcv10agfl5067ly1l16z`).
+`Company.accountID` for `platform: "callgrid"` is CallGrid **`organizationId`** (e.g. `cmfmvrcv10agfl5067ly1l16z`).
 
-## CallGrid API findings (verified)
+## Architecture (recommended)
 
-| Endpoint | API key (Bearer) | Notes |
-|----------|------------------|--------|
-| `GET /api/organizations` | 401 Not authenticated | Likely session/dashboard auth only |
-| `GET /api/organization` | 401 Not authenticated | Same |
-| `GET /api/call` | 200 | Each row includes `organizationId` |
-| `POST /api/reports/stats` (no `organizationId` query) | 200 | Scoped to the key’s org |
+The browser **must not** call `https://api.callgrid.com` (CORS blocks most portal origins).
 
-**Recommended discovery for per-org API keys:** `GET /api/call` with `maxItems=1` (or a small page), read `organizationId` from the first row.
+```
+Frontend  →  POST /api/v1/accounting/callgrid/resolve-org  →  Paragon BE  →  CallGrid API
+```
 
-Full reference: [CallGrid API](https://callgrid.com/api), [Swagger UI](https://api.callgrid.com/api/documentation).
+Per-buyer API keys stay in the request body for resolve + save; production keys are stored in MongoDB on `POST /api/v1/accounting/companies`.
 
-## CORS (browser → CallGrid)
-
-Preflight `OPTIONS` results (May 2026):
-
-| Origin | `Access-Control-Allow-Origin` |
-|--------|-------------------------------|
-| `http://localhost:3000` | `http://localhost:3000` |
-| `http://localhost:5173` | not set (browser direct call may fail) |
-| `https://app.callgrid.com` | `https://app.callgrid.com` |
-
-Use **direct** CallGrid `fetch` only when your portal origin is allowed. Otherwise use the backend proxy below.
-
-## Backend proxy
+## Backend endpoint
 
 ```http
 POST /api/v1/accounting/callgrid/resolve-org
@@ -36,35 +21,70 @@ Content-Type: application/json
 { "apiToken": "<callgrid-api-key>" }
 ```
 
-Response:
+**Success (200):**
 
 ```json
 {
   "success": true,
-  "organizations": [{ "organizationId": "cmfmvrcv10agfl5067ly1l16z", "label": "PM" }],
+  "organizations": [
+    { "organizationId": "cmfmvrcv10agfl5067ly1l16z", "label": "PM" }
+  ],
   "method": "GET /api/call"
 }
 ```
 
-## Frontend helper
+**Error (400):**
 
-Copy or import [`client/callgridResolveOrganization.js`](../client/callgridResolveOrganization.js):
+```json
+{
+  "success": false,
+  "error": "Invalid CallGrid API key (401 on /api/call).",
+  "organizations": []
+}
+```
+
+Server logic: [`services/callgridOrgResolveService.js`](../services/callgridOrgResolveService.js) — infers `organizationId` from `GET /api/call` (list org endpoints return 401 for API keys).
+
+## Frontend (copy into your portal repo)
 
 ```js
-import { resolveCallgridOrganization } from "./callgridResolveOrganization";
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
 
-const result = await resolveCallgridOrganization(apiToken, {
-  accountingApiBaseUrl: "http://localhost:3000", // your Paragon BE
-  callgridBaseUrl: "https://api.callgrid.com",
-});
+export async function resolveCallgridOrganization(apiToken) {
+  const res = await fetch(`${API_BASE}/api/v1/accounting/callgrid/resolve-org`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ apiToken: apiToken.trim() }),
+  });
+  return res.json();
+}
 
-if (result.success && result.organizations.length === 1) {
+// Validate key button:
+const result = await resolveCallgridOrganization(apiToken);
+if (result.success && result.organizations?.length === 1) {
   setAccountID(result.organizations[0].organizationId);
 }
 ```
 
-Then save with existing `POST /api/v1/accounting/companies` (`platform: "callgrid"`, `accountID`, `apiToken`, `companyName`).
+Optional: import [`client/callgridResolveOrganization.js`](../client/callgridResolveOrganization.js) (defaults to backend proxy only).
+
+## Save buyer
+
+```http
+POST /api/v1/accounting/companies
+{ "companyName", "accountID", "apiToken", "platform": "callgrid" }
+```
+
+Response omits `apiToken` by design.
+
+## Server deploy
+
+```bash
+cd /var/www/paragon-be && git pull origin main && pm2 restart paragon-be
+```
+
+No `CALLGRID_API_KEY` in server `.env` required for production — keys live in Mongo per company.
 
 ## Manual fallback
 
-Capture `organizationId` from dashboard DevTools on **Reports** → `POST /api/reports/stats?organizationId=...`, or use seed examples in [`config/callgridBuyers.js`](../config/callgridBuyers.js).
+DevTools on CallGrid Reports → `organizationId` in `POST /api/reports/stats?organizationId=...`, or seed list in [`config/callgridBuyers.js`](../config/callgridBuyers.js).
