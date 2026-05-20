@@ -8,6 +8,11 @@ el-cb-groc - sudo /usr/local/bin/deploy-el-cb-groc.sh
 el-cb-ss - sudo /usr/local/bin/deploy-el-cb-ss.sh
 es-cb-groc - sudo /usr/local/bin/deploy-es-cb-groc.sh
 es-cb-ss - sudo /usr/local/bin/deploy-es-cb-ss.sh
+cb-fe-25 (repo PragonMedia/cb-fe-25) - cd /var/www/templates/cb-fe-25 && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/cb-fe-25 && sudo chmod -R 755 /var/www/templates/cb-fe-25
+cb-fe (repo PragonMedia/cb-fe) - cd /var/www/templates/cb-fe && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/cb-fe && sudo chmod -R 755 /var/www/templates/cb-fe
+fe-40 (repo PragonMedia/cb-fe-40) - cd /var/www/templates/fe-40 && sudo -u www-data git fetch origin && sudo -u www-data git reset --hard "$(sudo -u www-data git -C /var/www/templates/fe-40 rev-parse --abbrev-ref origin/HEAD)" && sudo chown -R www-data:www-data /var/www/templates/fe-40 && sudo chmod -R 755 /var/www/templates/fe-40
+cb-groc-short (repo GG-Chatbot-GTG-GROC-SHORT) - cd /var/www/templates/cb-groc-short && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/cb-groc-short && sudo chmod -R 755 /var/www/templates/cb-groc-short
+cb-ss-short (repo GG-Chatbot-GTG-SS-SHORT) - cd /var/www/templates/cb-ss-short && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/cb-ss-short && sudo chmod -R 755 /var/www/templates/cb-ss-short
 backend code - cd /var/www/paragon-be && git pull && npm install && pm2 restart all
 backend code - cd /var/www/paragon-be && git pull origin main && pm2 restart all
 GENERAIC PAGES - cd /var/www/generic-pages
