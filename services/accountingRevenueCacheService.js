@@ -73,7 +73,7 @@ async function buildRevenuePayloadForWindow({ startDate, endDate, endDateTimeIso
     if (platform === "retriever") {
       result = await accountingService.getRevenueRangeFromRetriever({
         accountID: company.accountID,
-        apiKey,
+        apiKey: apiToken,
         start: startDate,
         end: endDate,
         includeTodayLive: true,
