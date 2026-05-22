@@ -638,8 +638,10 @@ async function getRevenueRangeFromCallgrid(options = {}) {
     const buyerRow = stats.buyers && stats.buyers[0];
     if (buyerRow && Array.isArray(buyerRow.revenue)) {
       for (const row of buyerRow.revenue) {
-        if (row.dateIso && row.totalPayout != null && !row.error) {
-          payoutByIso.set(row.dateIso, row.totalPayout);
+        // fetchDashboardBuyersStatsReport (minimal: false) exposes `payout`, not `totalPayout`
+        const payout = row.payout ?? row.totalPayout;
+        if (row.dateIso && payout != null && !row.error) {
+          payoutByIso.set(row.dateIso, payout);
         }
       }
     } else if (!stats.success) {

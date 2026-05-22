@@ -364,7 +364,8 @@ async function fetchCallgridPayoutForDay(options = {}) {
   if (day?.error) {
     return { success: false, error: day.error };
   }
-  const revenue = day?.totalPayout != null ? roundMoney2(day.totalPayout) : 0;
+  const amount = day?.payout ?? day?.totalPayout;
+  const revenue = amount != null ? roundMoney2(amount) : 0;
   return { success: true, revenue };
 }
 
