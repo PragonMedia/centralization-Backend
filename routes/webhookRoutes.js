@@ -8,5 +8,10 @@ router.post(
   googleConversionController.handleRingbaGoogleConversion
 );
 
+router.get(
+  "/ringba/google-conversion",
+  googleConversionController.handleRedTrackGoogleConversion
+);
+
 module.exports = router;
 
