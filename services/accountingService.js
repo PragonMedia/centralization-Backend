@@ -269,6 +269,16 @@ async function getBuyerComparisonRevenueForDay(options = {}) {
     : null;
 }
 
+function toFiniteMoney(value) {
+  if (value == null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 /**
  * Fetch revenue for the last 7 days (today-6 through today). Only completed days get Ringba data; today gets revenue "".
  * @param {Object} options - { accountID, apiToken, baseUrl? }
@@ -388,32 +398,57 @@ async function getRevenueRangeFromRingba(options = {}) {
           continue;
         }
 
-        const buyerCompany = buyersIndex.find(
+        const buyerCompanies = buyersIndex.filter(
           (b) => b.normalizedName === normalizedBuyer && b.accountID !== accountID
         );
 
-        if (!buyerCompany) {
+        if (!buyerCompanies.length) {
           enrichedRecords.push(r);
           continue;
         }
 
-        const cacheKey = `${buyerCompany.accountID}:${dayLabel}`;
-        let buyerRevenue = buyerDayCache.get(cacheKey);
+        let aggregatedRevenue = 0;
+        let hasAtLeastOneSuccess = false;
+        const buyerConversionAmountSources = [];
 
-        if (buyerRevenue === undefined) {
-          const buyerResult = await getBuyerComparisonRevenueForDay({
-            buyerCompany,
-            reportStart,
-            reportEnd,
-            ringbaBaseUrl: baseUrl,
+        for (const buyerCompany of buyerCompanies) {
+          const buyerPlatform =
+            (typeof buyerCompany.platform === "string"
+              ? buyerCompany.platform.trim().toLowerCase()
+              : "") || "ringba";
+          const cacheKey = `${buyerPlatform}:${buyerCompany.accountID}:${dayLabel}`;
+          let buyerRevenue = buyerDayCache.get(cacheKey);
+
+          if (buyerRevenue === undefined) {
+            const buyerResult = await getBuyerComparisonRevenueForDay({
+              buyerCompany,
+              reportStart,
+              reportEnd,
+              ringbaBaseUrl: baseUrl,
+            });
+            buyerRevenue = buyerResult;
+            buyerDayCache.set(cacheKey, buyerRevenue);
+          }
+
+          const numericRevenue = toFiniteMoney(buyerRevenue);
+          if (numericRevenue != null) {
+            hasAtLeastOneSuccess = true;
+            aggregatedRevenue += numericRevenue;
+          }
+
+          buyerConversionAmountSources.push({
+            platform: buyerPlatform,
+            accountID: buyerCompany.accountID,
+            amount: numericRevenue != null ? String(numericRevenue) : null,
           });
-          buyerRevenue = buyerResult;
-          buyerDayCache.set(cacheKey, buyerRevenue);
         }
 
         enrichedRecords.push({
           ...r,
-          buyerConversionAmount: buyerRevenue,
+          buyerConversionAmount: hasAtLeastOneSuccess
+            ? String(Number(aggregatedRevenue.toFixed(4)))
+            : null,
+          buyerConversionAmountSources,
         });
       }
     }

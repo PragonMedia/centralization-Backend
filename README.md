@@ -4,6 +4,8 @@
 
 cb-groc - sudo /usr/local/bin/deploy-cb-groc.sh
 cb-ss - sudo /usr/local/bin/deploy-cb-ss.sh
+cb-debt (repo [PragonMedia/cb-debt](https://github.com/PragonMedia/cb-debt.git)) - cd /var/www/templates/cb-debt && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/cb-debt && sudo chmod -R 755 /var/www/templates/cb-debt
+quiz-debt (repo [PragonMedia/quiz-debt](https://github.com/PragonMedia/quiz-debt.git)) - cd /var/www/templates/quiz-debt && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/quiz-debt && sudo chmod -R 755 /var/www/templates/quiz-debt
 el-cb-groc - sudo /usr/local/bin/deploy-el-cb-groc.sh
 el-cb-ss - sudo /usr/local/bin/deploy-el-cb-ss.sh
 es-cb-groc - sudo /usr/local/bin/deploy-es-cb-groc.sh
