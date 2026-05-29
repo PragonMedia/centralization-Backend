@@ -190,6 +190,85 @@ function parseGooglePartialFailure(responseData) {
   return partialFailureError;
 }
 
+/**
+ * Plain-text summary from Google partial-failure or API error payloads.
+ */
+function extractGoogleFailureSummary(details) {
+  if (!details) return "";
+  if (typeof details === "string") return details.trim().slice(0, 500);
+  if (typeof details.message === "string" && details.message.trim()) {
+    return details.message.trim().slice(0, 500);
+  }
+  const blocks = details.details;
+  if (Array.isArray(blocks)) {
+    for (const block of blocks) {
+      const errors = block?.errors;
+      if (!Array.isArray(errors)) continue;
+      for (const err of errors) {
+        const codeKey =
+          err?.errorCode && typeof err.errorCode === "object"
+            ? Object.values(err.errorCode).find((v) => typeof v === "string" && v) || ""
+            : "";
+        const msg = typeof err?.message === "string" ? err.message.trim() : "";
+        if (codeKey || msg) {
+          return `${codeKey}${codeKey && msg ? ": " : ""}${msg}`.slice(0, 500);
+        }
+      }
+    }
+  }
+  try {
+    return JSON.stringify(details).slice(0, 500);
+  } catch {
+    return "";
+  }
+}
+
+/** Skip Slack for high-volume expected validation misses (no click id). */
+function shouldNotifyGoogleConversionSlack(result) {
+  if (!result || result.ok) return false;
+  if (result.error === "missing_click_id") return false;
+  return true;
+}
+
+/**
+ * Human-readable Slack alert (same channel as Roku/CM360 via SLACK_WEBHOOK_URL).
+ */
+function formatGoogleConversionSlackAlert({ result, source, exception } = {}) {
+  const statusCode = exception
+    ? exception.response?.status || 500
+    : result?.statusCode || 500;
+  const lines = [
+    `GOOGLE CONVERSION FAILED [HTTP ${statusCode}]`,
+    `Source: ${source || "unknown"}`,
+  ];
+
+  if (result && !result.ok) {
+    lines.push(`Error type: ${result.error || "unknown"}`);
+    if (result.message) lines.push(`Message: ${result.message}`);
+    if (result.conversionActionId) {
+      lines.push(`Conversion action ID: ${result.conversionActionId}`);
+    }
+    if (result.clickIdType) lines.push(`Click ID type: ${result.clickIdType}`);
+    if (result.conversionDateTime) {
+      lines.push(`Conversion time: ${result.conversionDateTime}`);
+    }
+    const summary = extractGoogleFailureSummary(result.details);
+    if (summary) lines.push(`Google details: ${summary}`);
+  }
+
+  if (exception) {
+    lines.push("Error type: google_conversion_upload_failed");
+    if (exception.response?.status) {
+      lines.push(`Google Ads API status: ${exception.response.status}`);
+    }
+    lines.push(`Message: ${exception.message}`);
+    const apiSummary = extractGoogleFailureSummary(exception.response?.data);
+    if (apiSummary) lines.push(`Google details: ${apiSummary}`);
+  }
+
+  return lines.join("\n");
+}
+
 async function uploadGoogleClickConversion(payload = {}) {
   const clickId = pickClickId(payload);
   const conversionActionId = validateConversionActionId(payload.conversionActionId);
@@ -318,5 +397,8 @@ async function uploadGoogleClickConversion(payload = {}) {
 
 module.exports = {
   uploadGoogleClickConversion,
+  shouldNotifyGoogleConversionSlack,
+  formatGoogleConversionSlackAlert,
+  extractGoogleFailureSummary,
 };
 

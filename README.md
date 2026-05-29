@@ -108,3 +108,4 @@ UI validation script: `node scripts/compare-roku-spend-ui.js --start 2026-05-04 
 - Google Ads API version is configurable via `GOOGLE_ADS_API_VERSION` (default: `v22`)
 - Temporary JSON log file for Google conversion attempts:
   - `logs/google-conversions.jsonl` (one JSON object per line; success + failure + exceptions)
+- Slack alerts (`SLACK_WEBHOOK_URL`, same channel as Roku/CM360): sent on upload failures (HTTP 4xx/5xx except missing click id). Message includes HTTP status, error type, conversion action ID, and Google error summary.
