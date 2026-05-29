@@ -100,6 +100,7 @@ UI validation script: `node scripts/compare-roku-spend-ui.js --start 2026-05-04 
   - `conversion_value` (optional, numeric; falls back to `1` if missing/invalid)
   - `currency_code` (optional; defaults to `USD`)
   - click id priority: `gclid` -> `gbraid` -> `wbraid` (at least one required)
+  - `callID` (optional, Ringba tracking only): echoed on error responses and Slack alerts; not sent to Google
 - Hardcoded upload context for phase 1:
   - `googleCustomerId = 4316986825`
   - `loginCustomerId = 4316986825`

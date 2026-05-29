@@ -91,6 +91,18 @@ function resolveCurrencyCode(payload = {}) {
   return normalized || GOOGLE_CURRENCY_CODE;
 }
 
+/** Ringba tracking id — echoed on errors only; never sent to Google. */
+function resolveCallId(payload = {}) {
+  const raw = payload.callID ?? payload.callId ?? payload.call_id ?? "";
+  const normalized = typeof raw === "string" ? raw.trim() : String(raw || "").trim();
+  return normalized || null;
+}
+
+function attachCallIdToErrorResult(result, callId) {
+  if (!result || result.ok || !callId) return result;
+  return { ...result, callID: callId };
+}
+
 function maskClickId(value) {
   const raw = typeof value === "string" ? value.trim() : "";
   if (!raw) return "";
@@ -233,7 +245,7 @@ function shouldNotifyGoogleConversionSlack(result) {
 /**
  * Human-readable Slack alert (same channel as Roku/CM360 via SLACK_WEBHOOK_URL).
  */
-function formatGoogleConversionSlackAlert({ result, source, exception } = {}) {
+function formatGoogleConversionSlackAlert({ result, source, exception, callID } = {}) {
   const statusCode = exception
     ? exception.response?.status || 500
     : result?.statusCode || 500;
@@ -241,6 +253,9 @@ function formatGoogleConversionSlackAlert({ result, source, exception } = {}) {
     `GOOGLE CONVERSION FAILED [HTTP ${statusCode}]`,
     `Source: ${source || "unknown"}`,
   ];
+
+  const trackingCallId = callID || result?.callID;
+  if (trackingCallId) lines.push(`Call ID: ${trackingCallId}`);
 
   if (result && !result.ok) {
     lines.push(`Error type: ${result.error || "unknown"}`);
@@ -270,6 +285,7 @@ function formatGoogleConversionSlackAlert({ result, source, exception } = {}) {
 }
 
 async function uploadGoogleClickConversion(payload = {}) {
+  const callId = resolveCallId(payload);
   const clickId = pickClickId(payload);
   const conversionActionId = validateConversionActionId(payload.conversionActionId);
   const conversionDateTime = resolveConversionDateTime(payload.conversionDateTime);
@@ -282,6 +298,7 @@ async function uploadGoogleClickConversion(payload = {}) {
     conversionDateTime,
     conversionValue,
     currencyCode,
+    callID: callId,
     clickIdType: clickId?.clickIdType || null,
     clickIdMasked: maskClickId(clickId?.clickIdValue || ""),
     validateOnly: getValidateOnly(),
@@ -290,23 +307,29 @@ async function uploadGoogleClickConversion(payload = {}) {
 
   try {
     if (!clickId) {
-      const result = {
-        ok: false,
-        statusCode: 400,
-        error: "missing_click_id",
-        message: "One of gclid, gbraid, or wbraid is required.",
-      };
+      const result = attachCallIdToErrorResult(
+        {
+          ok: false,
+          statusCode: 400,
+          error: "missing_click_id",
+          message: "One of gclid, gbraid, or wbraid is required.",
+        },
+        callId
+      );
       await writeGoogleConversionLog({ ...logContext, outcome: "validation_error", result });
       return result;
     }
 
     if (!conversionActionId) {
-      const result = {
-        ok: false,
-        statusCode: 400,
-        error: "invalid_conversion_action_id",
-        message: "conversionActionId is required and must be numeric.",
-      };
+      const result = attachCallIdToErrorResult(
+        {
+          ok: false,
+          statusCode: 400,
+          error: "invalid_conversion_action_id",
+          message: "conversionActionId is required and must be numeric.",
+        },
+        callId
+      );
       await writeGoogleConversionLog({ ...logContext, outcome: "validation_error", result });
       return result;
     }
@@ -352,16 +375,19 @@ async function uploadGoogleClickConversion(payload = {}) {
 
     const partialFailure = parseGooglePartialFailure(response.data);
     if (partialFailure) {
-      const result = {
-        ok: false,
-        statusCode: 500,
-        error: "google_upload_partial_failure",
-        message: "google upload partial failure",
-        details: partialFailure,
-        clickIdType: clickId.clickIdType,
-        conversionActionId,
-        conversionDateTime,
-      };
+      const result = attachCallIdToErrorResult(
+        {
+          ok: false,
+          statusCode: 500,
+          error: "google_upload_partial_failure",
+          message: "google upload partial failure",
+          details: partialFailure,
+          clickIdType: clickId.clickIdType,
+          conversionActionId,
+          conversionDateTime,
+        },
+        callId
+      );
       await writeGoogleConversionLog({
         ...logContext,
         outcome: "partial_failure",
@@ -400,5 +426,6 @@ module.exports = {
   shouldNotifyGoogleConversionSlack,
   formatGoogleConversionSlackAlert,
   extractGoogleFailureSummary,
+  resolveCallId,
 };
 
