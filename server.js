@@ -6,6 +6,9 @@ const mongoose = require("mongoose");
 const {
   startAccountingRevenueScheduler,
 } = require("./services/accountingRevenueScheduler");
+const {
+  startStatePerformanceScheduler,
+} = require("./services/statePerformanceScheduler");
 
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
@@ -23,6 +26,7 @@ mongoose
   .then(() => {
     console.log("✅ Connected to MongoDB Atlas");
     startAccountingRevenueScheduler();
+    startStatePerformanceScheduler();
   })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 

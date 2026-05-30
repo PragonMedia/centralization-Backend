@@ -16,6 +16,7 @@ const sslRouter = require("./routes/sslRoutes");
 const ringbaRouter = require("./routes/ringbaRoutes");
 const trackRouter = require("./routes/trackRoutes");
 const accountingRouter = require("./routes/accountingRoutes");
+const statePerformanceRouter = require("./routes/statePerformanceRoutes");
 const rokuLogsRouter = require("./routes/rokuLogsRoutes");
 const rokuAdsRouter = require("./routes/rokuAdsRoutes");
 const webhookRouter = require("./routes/webhookRoutes");
@@ -203,6 +204,7 @@ app.use("/api/v1/validate", cloakingRouter);
 app.use("/api/v1/ssl", sslRouter);
 app.use("/api/v1/track", trackRouter);
 app.use("/api/v1/accounting", accountingRouter);
+app.use("/api/v1/state-performance", statePerformanceRouter);
 app.use("/api/v1", rokuLogsRouter);
 app.use("/api/v1", rokuAdsRouter);
 app.use("/api/v1", routeRouter); // ✅ example endpoint: POST /routes
