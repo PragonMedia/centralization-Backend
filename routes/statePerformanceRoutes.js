@@ -8,5 +8,6 @@ const statePerformanceController = require("../controllers/statePerformanceContr
 
 router.post("/refresh", statePerformanceController.refreshStatePerformance);
 router.get("/cached", statePerformanceController.getCachedStatePerformance);
+router.get("/channels", statePerformanceController.getStatePerformanceChannels);
 
 module.exports = router;
