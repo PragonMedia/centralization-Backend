@@ -1,5 +1,5 @@
 /**
- * State Performance controller â€“ Ringba state insights for frontend display.
+ * State Performance controller – Ringba state insights for frontend display.
  */
 const statePerformanceCacheService = require("../services/statePerformanceCacheService");
 const statePerformanceService = require("../services/statePerformanceService");
@@ -20,30 +20,30 @@ exports.refreshStatePerformance = async (req, res) => {
       });
     }
 
-    const weeks = result.payload?.weeks || [];
+    const days = result.payload?.days || [];
     const channels = result.payload?.channels || [];
-    const sampleWeek = weeks.length > 0 ? weeks[weeks.length - 1] : null;
+    const sampleDay = days.length > 0 ? days[days.length - 1] : null;
 
     return res.status(200).json({
       success: result.payload?.success ?? false,
-      weeksFetched: weeks.length,
+      daysFetched: days.length,
       channelsDiscovered: channels.length,
       channels,
       windowStart: result.windowStart,
       windowEnd: result.windowEnd,
-      sampleWeek: sampleWeek
+      sampleDay: sampleDay
         ? {
-            weekLabel: sampleWeek.weekLabel,
-            totalStateCount: sampleWeek.total?.states?.length || 0,
-            topTotalStates: (sampleWeek.total?.states || []).slice(0, 5),
-            channelBreakdown: (sampleWeek.channels || []).map((c) => ({
+            day: sampleDay.day,
+            totalStateCount: sampleDay.total?.states?.length || 0,
+            topTotalStates: (sampleDay.total?.states || []).slice(0, 5),
+            channelBreakdown: (sampleDay.channels || []).map((c) => ({
               channel: c.channel,
               stateCount: c.states?.length || 0,
             })),
           }
         : null,
-      failedWeeks: result.payload?.summary?.failedWeeks || [],
-      failedChannelWeeks: result.payload?.summary?.failedChannelWeeks || [],
+      failedDays: result.payload?.summary?.failedDays || [],
+      failedChannelDays: result.payload?.summary?.failedChannelDays || [],
     });
   } catch (err) {
     console.error("StatePerformance refresh error:", err);
@@ -87,7 +87,7 @@ exports.getCachedStatePerformance = async (req, res) => {
 
 /**
  * GET /api/v1/state-performance/channels
- * Live channel list from Ringba (full 8-week discovery window).
+ * Live channel list from Ringba (full rolling 2-month discovery window).
  */
 exports.getStatePerformanceChannels = async (req, res) => {
   try {
@@ -96,10 +96,13 @@ exports.getStatePerformanceChannels = async (req, res) => {
       return res.status(400).json({ success: false, error: creds.message, channels: [] });
     }
 
+    const windowData = statePerformanceService.getRollingTwoMonthWindow();
     const result = await statePerformanceService.listChannelsFromRingba({
       accountID: creds.accountID,
       apiToken: creds.apiToken,
       baseUrl: creds.baseUrl,
+      startDate: windowData.startDate,
+      endDateTimeIso: windowData.endDateTimeIso,
     });
 
     return res.status(result.success ? 200 : 400).json({

@@ -2,7 +2,7 @@ const statePerformanceCacheService = require("./statePerformanceCacheService");
 
 let schedulerTimer = null;
 let refreshInProgress = false;
-let lastRunWeekKey = "";
+let lastRunDateKey = "";
 
 function getEasternClock() {
   const formatter = new Intl.DateTimeFormat("en-US", {
@@ -27,7 +27,7 @@ function getEasternClock() {
     hour: out.hour,
     minute: out.minute,
     weekday: out.weekday,
-    weekKey: `${out.year}-${out.month}-${out.day}`,
+    dateKey: `${out.year}-${out.month}-${out.day}`,
   };
 }
 
@@ -36,11 +36,11 @@ async function runScheduledRefresh() {
   refreshInProgress = true;
   try {
     const result = await statePerformanceCacheService.refreshStatePerformanceCache({
-      trigger: "scheduler_friday_7pm_et",
+      trigger: "scheduler_1am_et",
     });
     console.log("StatePerformance scheduler: refresh complete", {
       success: result.success,
-      weeksFetched: result.payload?.weeks?.length || 0,
+      daysFetched: result.payload?.days?.length || 0,
     });
   } catch (error) {
     console.error("StatePerformance scheduler refresh failed:", error.message);
@@ -54,15 +54,14 @@ function startStatePerformanceScheduler() {
 
   schedulerTimer = setInterval(async () => {
     const nowEt = getEasternClock();
-    const isFriday = nowEt.weekday === "Fri";
-    const shouldRun = isFriday && nowEt.hour === "19" && nowEt.minute === "00";
+    const shouldRun = nowEt.hour === "01" && nowEt.minute === "00";
     if (!shouldRun) return;
-    if (lastRunWeekKey === nowEt.weekKey) return;
-    lastRunWeekKey = nowEt.weekKey;
+    if (lastRunDateKey === nowEt.dateKey) return;
+    lastRunDateKey = nowEt.dateKey;
     await runScheduledRefresh();
   }, 60000);
 
-  console.log("StatePerformance scheduler started (Friday 7:00 PM America/New_York)");
+  console.log("StatePerformance scheduler started (daily 1:00 AM America/New_York)");
 }
 
 function stopStatePerformanceScheduler() {

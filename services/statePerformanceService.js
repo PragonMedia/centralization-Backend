@@ -1,12 +1,12 @@
 /**
- * State Performance service – Ringba Insights by US state, total + per-channel.
+ * State Performance service � Ringba Insights by US state, total + per-channel.
  * Filters: qualified=yes, Paragon - Medicare. Channel filter optional per request.
+ * Window: rolling 2 months of daily records (accounting-like behavior).
  */
 const axios = require("axios");
 const RINGBA_CONFIG = require("../config/ringbaApi");
 
 const DEFAULT_BASE_URL = (RINGBA_CONFIG.BASE_URL || "https://api.ringba.com").replace(/\/$/, "");
-const STATE_WEEKS_COUNT = 8;
 const NO_VALUE = "-no value-";
 const CAMPAIGN_NAME = "Paragon - Medicare";
 
@@ -32,6 +32,75 @@ const VALUE_COLUMNS = [
   { column: "avgHandleTime", aggregateFunction: null },
   { column: "totalCost", aggregateFunction: null },
 ];
+
+function toIsoNoMs(date) {
+  return new Date(date).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function getRollingTwoMonthWindow() {
+  const now = new Date();
+  const start = new Date(now);
+  start.setUTCMonth(start.getUTCMonth() - 2);
+  return {
+    startDate: toIsoNoMs(start).slice(0, 10),
+    endDate: toIsoNoMs(now).slice(0, 10),
+    endDateTimeIso: toIsoNoMs(now),
+  };
+}
+
+function parseUTCDate(ymd) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || ""))) return null;
+  const [y, m, d] = ymd.split("-").map((n) => parseInt(n, 10));
+  const dt = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+  if (
+    dt.getUTCFullYear() !== y ||
+    dt.getUTCMonth() !== m - 1 ||
+    dt.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  return dt;
+}
+
+function getDaysInRangeUTC(startYmd, endYmd) {
+  const start = parseUTCDate(startYmd);
+  const end = parseUTCDate(endYmd);
+  if (!start || !end || end < start) return null;
+
+  const now = new Date();
+  const todayUTC = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0)
+  );
+
+  const out = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    const y = cur.getUTCFullYear();
+    const m = cur.getUTCMonth();
+    const d = cur.getUTCDate();
+    const dayLabel = `${String(m + 1).padStart(2, "0")}/${String(d).padStart(2, "0")}/${y}`;
+    out.push({
+      date: new Date(cur),
+      day: dayLabel,
+      dateIso: `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+      isToday: cur.getTime() === todayUTC.getTime(),
+    });
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
+
+function getRingbaDayWindow(utcDate) {
+  const y = utcDate.getUTCFullYear();
+  const m = utcDate.getUTCMonth();
+  const d = utcDate.getUTCDate();
+  const reportStart = new Date(Date.UTC(y, m, d, 4, 0, 0, 0));
+  const reportEnd = new Date(Date.UTC(y, m, d + 1, 3, 59, 59, 999));
+  return {
+    reportStart: reportStart.toISOString().replace(/\.\d{3}Z$/, "Z"),
+    reportEnd: reportEnd.toISOString().replace(/\.\d{3}Z$/, "Z"),
+  };
+}
 
 function buildBaseFilters(channel) {
   const filters = [
@@ -74,7 +143,7 @@ function buildBaseFilters(channel) {
 }
 
 /**
- * Build Insights body grouped by state. channel=null → total (all channels).
+ * Build Insights body grouped by state. channel=null -> total (all channels).
  */
 function buildStatePerformanceInsightsBody(reportStart, reportEnd, channel = null) {
   return {
@@ -111,58 +180,6 @@ function buildChannelDiscoveryInsightsBody(reportStart, reportEnd) {
     filters: buildBaseFilters(null),
     formatTimeZone: "America/New_York",
   };
-}
-
-function formatWeekLabelDate(d) {
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  const y = d.getUTCFullYear();
-  return `${m}/${day}/${y}`;
-}
-
-function getWeekStartMonday(utcDate) {
-  const d = new Date(
-    Date.UTC(utcDate.getUTCFullYear(), utcDate.getUTCMonth(), utcDate.getUTCDate())
-  );
-  const dayOfWeek = d.getUTCDay();
-  const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-  d.setUTCDate(d.getUTCDate() - daysFromMonday);
-  d.setUTCHours(4, 0, 0, 0);
-  return d;
-}
-
-function buildWeekWindow(weekStartMonday) {
-  const reportStart = weekStartMonday.toISOString().replace(/\.\d{3}Z$/, "Z");
-  const weekEnd = new Date(weekStartMonday);
-  weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
-  weekEnd.setUTCHours(3, 59, 59, 0);
-  const reportEnd = weekEnd.toISOString().replace(/\.\d{3}Z$/, "Z");
-
-  const labelStart = new Date(weekStartMonday);
-  labelStart.setUTCHours(0, 0, 0, 0);
-  const labelEnd = new Date(labelStart);
-  labelEnd.setUTCDate(labelEnd.getUTCDate() + 6);
-
-  return {
-    reportStart,
-    reportEnd,
-    weekLabel: `${formatWeekLabelDate(labelStart)} - ${formatWeekLabelDate(labelEnd)}`,
-  };
-}
-
-function getStatePerformanceWeekWindows(count = STATE_WEEKS_COUNT) {
-  const now = new Date();
-  const currentWeekStart = getWeekStartMonday(now);
-  const mostRecentCompletedWeekStart = new Date(currentWeekStart);
-  mostRecentCompletedWeekStart.setUTCDate(mostRecentCompletedWeekStart.getUTCDate() - 7);
-
-  const weeks = [];
-  for (let i = count - 1; i >= 0; i--) {
-    const weekStart = new Date(mostRecentCompletedWeekStart);
-    weekStart.setUTCDate(weekStart.getUTCDate() - i * 7);
-    weeks.push(buildWeekWindow(weekStart));
-  }
-  return weeks;
 }
 
 function stripRollupRecords(records) {
@@ -213,7 +230,7 @@ async function postRingbaInsights(options = {}) {
         "Content-Type": "application/json",
         Authorization: authHeader,
       },
-      timeout: 20000,
+      timeout: 30000,
     });
 
     const data = response.data;
@@ -228,7 +245,12 @@ async function postRingbaInsights(options = {}) {
       label: label || "insights",
       status,
       message: error.message,
-      data: data != null ? (typeof data === "string" ? data : JSON.stringify(data).slice(0, 500)) : undefined,
+      data:
+        data != null
+          ? typeof data === "string"
+            ? data
+            : JSON.stringify(data).slice(0, 500)
+          : undefined,
     });
     return {
       success: false,
@@ -239,18 +261,30 @@ async function postRingbaInsights(options = {}) {
 }
 
 /**
- * Discover channels over the full refresh window (all 8 weeks).
+ * Discover channels over full rolling 2-month window.
  */
 async function listChannelsFromRingba(options = {}) {
-  const { accountID, apiToken, baseUrl, weekCount = STATE_WEEKS_COUNT } = options;
-  const windows = getStatePerformanceWeekWindows(weekCount);
-  if (windows.length === 0) {
-    return { success: false, message: "No week windows.", channels: [] };
+  const { accountID, apiToken, baseUrl, startDate, endDateTimeIso } = options;
+  const windowData =
+    startDate && endDateTimeIso
+      ? { startDate, endDateTimeIso }
+      : getRollingTwoMonthWindow();
+
+  const start = parseUTCDate(windowData.startDate);
+  if (!start) {
+    return { success: false, message: "Invalid startDate.", channels: [] };
   }
 
-  const reportStart = windows[0].reportStart;
-  const reportEnd = windows[windows.length - 1].reportEnd;
-  const body = buildChannelDiscoveryInsightsBody(reportStart, reportEnd);
+  const discoveryStart = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate(), 4, 0, 0, 0)
+  )
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "Z");
+  const discoveryEnd =
+    (typeof windowData.endDateTimeIso === "string" && windowData.endDateTimeIso.trim()) ||
+    toIsoNoMs(new Date());
+
+  const body = buildChannelDiscoveryInsightsBody(discoveryStart, discoveryEnd);
 
   const result = await postRingbaInsights({
     accountID,
@@ -270,8 +304,8 @@ async function listChannelsFromRingba(options = {}) {
   return {
     success: true,
     channels,
-    reportStart,
-    reportEnd,
+    reportStart: discoveryStart,
+    reportEnd: discoveryEnd,
   };
 }
 
@@ -298,126 +332,164 @@ async function fetchStatePerformanceFromRingba(options = {}) {
     };
   }
 
-  const states = cleanStatePerformanceRecords(result.records);
-
   return {
     success: true,
     reportStart,
     reportEnd,
     channel,
     rawRecordCount: result.records.length,
-    states,
+    states: cleanStatePerformanceRecords(result.records),
   };
 }
 
 /**
- * Discover channels, then fetch total + per-channel state data for each week.
+ * Discover channels, then fetch total + per-channel state data for each day.
  */
-async function fetchAllWeeksStatePerformance(options = {}) {
-  const { accountID, apiToken, baseUrl, weekCount = STATE_WEEKS_COUNT } = options;
-  const windows = getStatePerformanceWeekWindows(weekCount);
+async function fetchAllDaysStatePerformance(options = {}) {
+  const { accountID, apiToken, baseUrl, startDate, endDate, endDateTimeIso } = options;
+  const windowData =
+    startDate && endDate && endDateTimeIso
+      ? { startDate, endDate, endDateTimeIso }
+      : getRollingTwoMonthWindow();
+
+  const days = getDaysInRangeUTC(windowData.startDate, windowData.endDate);
+  if (!days || days.length === 0) {
+    return {
+      success: false,
+      channels: [],
+      days: [],
+      summary: {
+        daysFetched: 0,
+        channelsDiscovered: 0,
+        failedDays: [],
+        failedChannelDays: [],
+        message: "Invalid or empty date range.",
+      },
+    };
+  }
 
   const channelResult = await listChannelsFromRingba({
     accountID,
     apiToken,
     baseUrl,
-    weekCount,
+    startDate: windowData.startDate,
+    endDateTimeIso: windowData.endDateTimeIso,
   });
 
   if (!channelResult.success) {
     return {
       success: false,
       channels: [],
-      weeks: [],
+      days: [],
       summary: {
-        weeksFetched: 0,
+        daysFetched: 0,
         channelsDiscovered: 0,
-        failedWeeks: [],
-        failedChannelWeeks: [],
+        failedDays: [],
+        failedChannelDays: [],
         message: channelResult.message,
       },
     };
   }
 
   const channels = channelResult.channels;
-  const weeks = [];
-  const failedWeeks = [];
-  const failedChannelWeeks = [];
+  const daysPayload = [];
+  const failedDays = [];
+  const failedChannelDays = [];
 
-  for (const window of windows) {
+  for (const dayEntry of days) {
+    const { reportStart, reportEnd } = dayEntry.isToday
+      ? {
+          reportStart: new Date(
+            Date.UTC(
+              dayEntry.date.getUTCFullYear(),
+              dayEntry.date.getUTCMonth(),
+              dayEntry.date.getUTCDate(),
+              4,
+              0,
+              0,
+              0
+            )
+          )
+            .toISOString()
+            .replace(/\.\d{3}Z$/, "Z"),
+          reportEnd: windowData.endDateTimeIso,
+        }
+      : getRingbaDayWindow(dayEntry.date);
+
     const totalResult = await fetchStatePerformanceFromRingba({
       accountID,
       apiToken,
       baseUrl,
-      reportStart: window.reportStart,
-      reportEnd: window.reportEnd,
+      reportStart,
+      reportEnd,
       channel: null,
     });
 
-    const channelWeekData = [];
+    const channelDayData = [];
     for (const channel of channels) {
-      const channelResult = await fetchStatePerformanceFromRingba({
+      const chResult = await fetchStatePerformanceFromRingba({
         accountID,
         apiToken,
         baseUrl,
-        reportStart: window.reportStart,
-        reportEnd: window.reportEnd,
+        reportStart,
+        reportEnd,
         channel,
       });
 
-      channelWeekData.push({
+      channelDayData.push({
         channel,
-        success: channelResult.success,
-        states: channelResult.states || [],
-        message: channelResult.message,
+        success: chResult.success,
+        states: chResult.states || [],
+        message: chResult.message,
       });
 
-      if (!channelResult.success) {
-        failedChannelWeeks.push({
-          weekLabel: window.weekLabel,
+      if (!chResult.success) {
+        failedChannelDays.push({
+          day: dayEntry.day,
           channel,
-          message: channelResult.message,
+          message: chResult.message,
         });
       }
     }
 
-    const weekSuccess = totalResult.success && channelWeekData.every((c) => c.success);
+    const daySuccess = totalResult.success && channelDayData.every((c) => c.success);
     if (!totalResult.success) {
-      failedWeeks.push(window.weekLabel);
+      failedDays.push(dayEntry.day);
     }
 
-    const weekData = {
-      weekStart: window.reportStart,
-      weekEnd: window.reportEnd,
-      weekLabel: window.weekLabel,
-      success: weekSuccess,
+    const dayData = {
+      day: dayEntry.day,
+      dateIso: dayEntry.dateIso,
+      reportStart,
+      reportEnd,
+      success: daySuccess,
       total: {
         success: totalResult.success,
         states: totalResult.states || [],
         message: totalResult.message,
       },
-      channels: channelWeekData,
+      channels: channelDayData,
     };
 
-    console.log("StatePerformance week:", {
-      weekLabel: weekData.weekLabel,
-      totalStates: weekData.total.states.length,
-      channels: channelWeekData.map((c) => ({ channel: c.channel, stateCount: c.states.length })),
+    console.log("StatePerformance day:", {
+      day: dayData.day,
+      totalStates: dayData.total.states.length,
+      channels: channelDayData.map((c) => ({ channel: c.channel, stateCount: c.states.length })),
     });
 
-    weeks.push(weekData);
+    daysPayload.push(dayData);
   }
 
   const payload = {
-    success: weeks.every((w) => w.success),
+    success: daysPayload.every((d) => d.success),
     channels,
-    weeks,
+    days: daysPayload,
     summary: {
-      weeksFetched: weeks.length,
+      daysFetched: daysPayload.length,
       channelsDiscovered: channels.length,
-      totalStateRows: weeks.reduce((sum, w) => sum + w.total.states.length, 0),
-      failedWeeks,
-      failedChannelWeeks,
+      totalStateRows: daysPayload.reduce((sum, d) => sum + d.total.states.length, 0),
+      failedDays,
+      failedChannelDays,
     },
   };
 
@@ -427,14 +499,15 @@ async function fetchAllWeeksStatePerformance(options = {}) {
 }
 
 module.exports = {
-  STATE_WEEKS_COUNT,
   CAMPAIGN_NAME,
+  getRollingTwoMonthWindow,
+  getDaysInRangeUTC,
+  getRingbaDayWindow,
   buildStatePerformanceInsightsBody,
   buildChannelDiscoveryInsightsBody,
-  getStatePerformanceWeekWindows,
   cleanStatePerformanceRecords,
   cleanChannelDiscoveryRecords,
   listChannelsFromRingba,
   fetchStatePerformanceFromRingba,
-  fetchAllWeeksStatePerformance,
+  fetchAllDaysStatePerformance,
 };
