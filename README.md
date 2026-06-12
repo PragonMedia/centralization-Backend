@@ -38,6 +38,13 @@ Env: `ROKU_ADS_CLIENT_ID`, `ROKU_ADS_CLIENT_SECRET`, `ROKU_ADS_REFRESH_TOKEN` (s
 
 UI validation script: `node scripts/compare-roku-spend-ui.js --start 2026-05-04 --end 2026-05-08`
 
+### Roku ad spend cache (dashboard)
+
+Mongo collection: `rokuAdSpend`. Rolling **2 calendar months**, per-day per-account spend. Nightly refresh at **1:00 AM America/New_York** (weekly chunks, up to ~1 hour).
+
+- `POST /api/v1/roku-ad-spend/refresh` — pull from Roku + overwrite cache (long-running; seed manually after deploy)
+- `GET /api/v1/roku-ad-spend/cached` — **frontend read** (`days[]` with `dateIso`, `totalSpend`, `accounts[]`)
+
 ## Accounting Platform Notes
 
 - Company records support `platform`: `ringba`, `retriever`, or `callgrid` (default `ringba`). CallGrid companies need `apiToken` (org API key) and `accountID` (CallGrid `organizationId`).

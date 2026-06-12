@@ -167,6 +167,7 @@ async function createSpendReport(options = {}) {
   const response = await adsApiRequest("POST", "/developer/reports", {
     data: { data: [{ type: "report", attributes }] },
     validateStatus: () => true,
+    timeout: options.requestTimeoutMs,
   });
 
   const apiErrors = formatRokuErrors(response.data);
@@ -264,17 +265,21 @@ async function getDeveloperPermissions() {
 async function pollReportStatus(reportUid, pollOptions = {}) {
   const intervalMs = pollOptions.intervalMs ?? ROKU_ADS.REPORT_POLL_INTERVAL_MS;
   const maxAttempts = pollOptions.maxAttempts ?? ROKU_ADS.REPORT_POLL_MAX_ATTEMPTS;
+  const requestTimeoutMs = pollOptions.requestTimeoutMs ?? ROKU_ADS.REQUEST_TIMEOUT_MS;
   const verbose = pollOptions.verbose === true;
   let lastStatus = "";
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const statusResponse = await adsApiRequest(
       "GET",
-      `/developer/reports/${encodeURIComponent(reportUid)}/status`
+      `/developer/reports/${encodeURIComponent(reportUid)}/status`,
+      { timeout: requestTimeoutMs }
     );
     let reportResponse = null;
     try {
-      reportResponse = await adsApiRequest("GET", `/developer/reports/${encodeURIComponent(reportUid)}`);
+      reportResponse = await adsApiRequest("GET", `/developer/reports/${encodeURIComponent(reportUid)}`, {
+        timeout: requestTimeoutMs,
+      });
     } catch {
       reportResponse = null;
     }
@@ -419,6 +424,7 @@ async function fetchSpendForRange(options = {}) {
   const polled = await pollReportStatus(created.reportUid, {
     ...(options.poll || {}),
     verbose: options.verbose,
+    requestTimeoutMs: options.requestTimeoutMs,
   });
   if (!polled.success) {
     return { ...polled, reportUid: created.reportUid };

@@ -11,5 +11,11 @@ module.exports = {
   ACCESS_TOKEN: (process.env.ROKU_ADS_ACCESS_TOKEN || "").trim(),
   REPORT_POLL_INTERVAL_MS: Math.max(500, parseInt(process.env.ROKU_ADS_REPORT_POLL_MS || "3000", 10) || 3000),
   REPORT_POLL_MAX_ATTEMPTS: Math.max(1, parseInt(process.env.ROKU_ADS_REPORT_POLL_MAX || "120", 10) || 120),
-  REQUEST_TIMEOUT_MS: Math.max(5000, parseInt(process.env.ROKU_ADS_REQUEST_TIMEOUT_MS || "30000", 10) || 30000),
+  /** Per-chunk poll budget for nightly cache refresh (~10 min at 3s × 200). */
+  CACHE_CHUNK_POLL_MAX_ATTEMPTS: Math.max(
+    1,
+    parseInt(process.env.ROKU_ADS_CACHE_CHUNK_POLL_MAX || "200", 10) || 200
+  ),
+  CACHE_CHUNK_DAYS: Math.max(1, parseInt(process.env.ROKU_ADS_CACHE_CHUNK_DAYS || "7", 10) || 7),
+  REQUEST_TIMEOUT_MS: Math.max(5000, parseInt(process.env.ROKU_ADS_REQUEST_TIMEOUT_MS || "120000", 10) || 120000),
 };
