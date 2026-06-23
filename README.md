@@ -13,6 +13,7 @@ es-cb-ss - sudo /usr/local/bin/deploy-es-cb-ss.sh
 homepage-debt (repo PragonMedia/debt-homepage) - cd /var/www/templates/homepage-debt && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/homepage-debt && sudo chmod -R 755 /var/www/templates/homepage-debt
 cas-ie (repo PragonMedia/Cas-ie) - cd /var/www/templates/cas-ie && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/cas-ie && sudo chmod -R 755 /var/www/templates/cas-ie
 cas-uk (repo PragonMedia/Cas-uk) - cd /var/www/templates/cas-uk && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/cas-uk && sudo chmod -R 755 /var/www/templates/cas-uk
+casino-bb (repo [PragonMedia/casino-bingbong](https://github.com/PragonMedia/casino-bingbong.git)) - cd /var/www/templates/casino-bb && sudo -u www-data git fetch origin && sudo -u www-data git reset --hard origin/main && sudo chown -R www-data:www-data /var/www/templates/casino-bb && sudo chmod -R 755 /var/www/templates/casino-bb
 aca-58 (repo PragonMedia/ACA-58) - cd /var/www/templates/aca-58 && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/aca-58 && sudo chmod -R 755 /var/www/templates/aca-58
 cb-fe-25 (repo PragonMedia/cb-fe-25) - cd /var/www/templates/cb-fe-25 && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/cb-fe-25 && sudo chmod -R 755 /var/www/templates/cb-fe-25
 cb-fe (repo PragonMedia/cb-fe) - cd /var/www/templates/cb-fe && sudo -u www-data git reset --hard origin/main && sudo -u www-data git pull origin main && sudo chown -R www-data:www-data /var/www/templates/cb-fe && sudo chmod -R 755 /var/www/templates/cb-fe
@@ -44,6 +45,30 @@ Mongo collection: `rokuAdSpend`. Rolling **2 calendar months**, per-day per-acco
 
 - `POST /api/v1/roku-ad-spend/refresh` — pull from Roku + overwrite cache (long-running; seed manually after deploy)
 - `GET /api/v1/roku-ad-spend/cached` — **frontend read** (`days[]` with `dateIso`, `totalSpend`, `accounts[]`)
+
+## Dynamic Ring Tree Target (FE tier RPC)
+
+Merged into main API (port 3000). **Final Expense** uses fixed ping tree IDs for FE Tier 1/2/3. Medicare, Debt, ACA profiles are stubbed — enable when tier IDs are provided.
+
+**Ringba pixel (Completed, GET):**
+
+```
+/webhooks/ringba/tier-rpc?vertical=fe&callId=[Call:InboundCallId]&targetId=[tag:Target:Id]&callerPhone=[tag:InboundNumber:Number]&revenue=[Call:ConversionAmount]
+```
+
+(`targetName` optional for logging only; batches and moves key off `targetId`.)
+
+**API:**
+
+- `GET /api/v1/ring-tree-target/health`
+- `GET /api/v1/ring-tree-target/status?profile=fe`
+- `GET /api/v1/ring-tree-target/profiles`
+- `POST /api/v1/ring-tree-target/test/simulate-batch` — test 15-call batch
+- `POST /api/v1/ring-tree-target/test/reset?profile=fe` — clear test state
+
+**Test script:** `node scripts/simulate-ring-tree-tier-batch.js --targetId PI...`
+
+Dry-run ON by default (`DYNAMIC_RING_TREE_DRY_RUN=false` for live moves). Slack tier-move alerts use `SLACK_WEBHOOK_URL` (same channel as Google conversion failures). Full spec: `DynamicRingTreeTarget.md`.
 
 ## Accounting Platform Notes
 
