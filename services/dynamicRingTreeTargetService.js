@@ -128,6 +128,145 @@ function computeRpcFromBatch(batch) {
   return Math.round((sum / CFG.BATCH_SIZE) * 10000) / 10000;
 }
 
+function batchPixelRevenueAllZero(batch) {
+  return (batch || []).every((c) => parseRevenue(c.revenue) === 0);
+}
+
+function extractCallDetailRecords(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.calls)) return data.calls;
+  if (Array.isArray(data.callLogs)) return data.callLogs;
+  if (Array.isArray(data.records)) return data.records;
+  if (Array.isArray(data.data)) return data.data;
+  if (data.report && Array.isArray(data.report.records)) return data.report.records;
+  return [];
+}
+
+function parseCallDetailRevenue(record) {
+  if (!record || typeof record !== "object") return 0;
+  const candidates = [
+    record.conversionAmount,
+    record.payoutAmount,
+    record.conversionPayout,
+    record.revenue,
+    record.earnings,
+    record.profit,
+  ];
+  for (const value of candidates) {
+    const parsed = parseRevenue(value);
+    if (parsed > 0) return parsed;
+  }
+  return parseRevenue(candidates.find((v) => v != null && v !== ""));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Ringba Completed pixels often send conversionAmount=0 (especially RTB).
+ * Pull settled revenue from calllogs/details for the batch call IDs.
+ */
+async function fetchCallRevenuesByInboundCallIds(callIds) {
+  const unique = [...new Set((callIds || []).map((id) => String(id || "").trim()).filter(Boolean))];
+  if (unique.length === 0) return { byId: new Map(), ok: true, fetched: 0 };
+
+  const response = await ringbaRequest("POST", "/calllogs/details", {
+    data: { InboundCallIds: unique },
+    validateStatus: (s) => s >= 200 && s < 500,
+  });
+
+  if (response.status < 200 || response.status >= 300) {
+    return {
+      byId: new Map(),
+      ok: false,
+      fetched: 0,
+      error: `calllogs/details HTTP ${response.status}`,
+    };
+  }
+
+  const byId = new Map();
+  for (const record of extractCallDetailRecords(response.data)) {
+    const id =
+      record.inboundCallId ||
+      record.InboundCallId ||
+      record.callId ||
+      record.id ||
+      record.callUUID;
+    if (!id) continue;
+    byId.set(String(id), parseCallDetailRevenue(record));
+  }
+  return { byId, ok: true, fetched: byId.size };
+}
+
+async function enrichBatchRevenueFromCallLogs(batch, options = {}) {
+  const pixelRpc = computeRpcFromBatch(batch);
+  const pixelAllZero = batchPixelRevenueAllZero(batch);
+  if (!pixelAllZero) {
+    return {
+      batch,
+      rpc: pixelRpc,
+      pixelRpc,
+      revenueSource: "pixel",
+      backfilled: false,
+      backfillOk: true,
+      hadAnyBackfillRevenue: false,
+    };
+  }
+
+  if (!CFG.REVENUE_BACKFILL_ENABLED) {
+    return {
+      batch,
+      rpc: pixelRpc,
+      pixelRpc,
+      revenueSource: "pixel",
+      backfilled: false,
+      backfillOk: false,
+      backfillSkipped: true,
+      hadAnyBackfillRevenue: false,
+    };
+  }
+
+  const delayMs = options.delayMs ?? CFG.REVENUE_BACKFILL_DELAY_MS;
+  if (delayMs > 0) await sleep(delayMs);
+
+  const callIds = (batch || []).map((c) => c.callId);
+  const { byId, ok, error, fetched } = await fetchCallRevenuesByInboundCallIds(callIds);
+  const enrichedBatch = (batch || []).map((call) => {
+    const backfilled = byId.get(call.callId);
+    if (backfilled == null) return call;
+    return {
+      ...call,
+      pixelRevenue: parseRevenue(call.revenue),
+      revenue: backfilled,
+      revenueSource: "calllogs",
+    };
+  });
+  const rpc = computeRpcFromBatch(enrichedBatch);
+  const hadAnyBackfillRevenue = enrichedBatch.some((c) => parseRevenue(c.revenue) > 0);
+
+  return {
+    batch: enrichedBatch,
+    rpc,
+    pixelRpc,
+    revenueSource: hadAnyBackfillRevenue ? "calllogs" : "pixel",
+    backfilled: true,
+    backfillOk: ok,
+    backfillError: error || null,
+    backfillFetched: fetched,
+    hadAnyBackfillRevenue,
+  };
+}
+
+function isDemotion(currentTier, desiredTier, profile) {
+  const tiers = (profile?.tiers || []).map((t) => t.name);
+  const currentIdx = tiers.indexOf(currentTier);
+  const desiredIdx = tiers.indexOf(desiredTier);
+  if (currentIdx < 0 || desiredIdx < 0) return false;
+  return desiredIdx > currentIdx;
+}
+
 function ringbaV2Url(relativePath) {
   const p = relativePath.startsWith("/") ? relativePath : `/${relativePath}`;
   return `${CFG.RINGBA_BASE_URL}/v2/${CFG.RINGBA_ACCOUNT_ID}${p}`;
@@ -321,7 +460,7 @@ function parsePixelParams(query = {}, body = {}) {
     targetId: pick("targetId", "target_id", "pingTreeTargetId", "rttId"),
     targetName: pick("targetName", "target_name", "name"),
     callerPhone: pick("callerPhone", "caller_phone", "phone", "ani"),
-    revenue: pick("revenue", "conversionAmount", "conversion_amount", "payout"),
+    revenue: pick("revenue", "conversionAmount", "conversion_amount", "conversionPayout", "payout", "payoutAmount"),
     profileKey: pick("vertical", "profile", "campaignVertical"),
   };
 }
@@ -503,7 +642,7 @@ async function addTargetToPingTree(sourceTargetId, destPingTreeId) {
   return { method: "POST", status: postRes.status, data: postRes.data };
 }
 
-async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc, state }) {
+async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc: initialRpc, state }) {
   const profile = CFG.getProfile(profileKey);
   if (!profile) {
     await appendEvent({
@@ -512,9 +651,46 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc,
       profileKey,
       targetId,
       targetName,
-      rpc,
+      rpc: initialRpc,
     });
     return { action: "skipped", reason: "unknown_profile" };
+  }
+
+  let batchForEval = batch;
+  let rpc = initialRpc;
+  let revenueMeta = {
+    revenueSource: "pixel",
+    pixelRpc: initialRpc,
+    backfilled: false,
+  };
+
+  if (batch && batch.length > 0) {
+    const enriched = await enrichBatchRevenueFromCallLogs(batch);
+    batchForEval = enriched.batch;
+    rpc = enriched.rpc;
+    revenueMeta = {
+      revenueSource: enriched.revenueSource,
+      pixelRpc: enriched.pixelRpc,
+      backfilled: enriched.backfilled,
+      backfillOk: enriched.backfillOk,
+      backfillError: enriched.backfillError,
+      backfillFetched: enriched.backfillFetched,
+      hadAnyBackfillRevenue: enriched.hadAnyBackfillRevenue,
+    };
+    if (enriched.backfilled) {
+      await appendEvent({
+        type: "revenue_backfill",
+        profileKey,
+        targetId,
+        targetName,
+        pixelRpc: enriched.pixelRpc,
+        rpc: enriched.rpc,
+        backfillOk: enriched.backfillOk,
+        backfillError: enriched.backfillError || null,
+        backfillFetched: enriched.backfillFetched || 0,
+        hadAnyBackfillRevenue: enriched.hadAnyBackfillRevenue,
+      });
+    }
   }
 
   let pingTrees;
@@ -556,6 +732,42 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc,
   const desiredTier = getDesiredTierWithHysteresis(rpc, currentTier, profile);
   const desiredPingTreeId = tierIdMap.get(desiredTier);
   const blockedByHysteresis = rawTier !== currentTier && desiredTier === currentTier;
+  const demotion = isDemotion(currentTier, desiredTier, profile);
+  const pixelAllZero = batchPixelRevenueAllZero(batch);
+  const revenueConfirmedByCallLogs =
+    revenueMeta.hadAnyBackfillRevenue ||
+    (revenueMeta.backfilled && revenueMeta.backfillOk && (revenueMeta.backfillFetched || 0) > 0);
+
+  if (
+    demotion &&
+    CFG.SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC &&
+    rpc === 0 &&
+    pixelAllZero &&
+    !revenueConfirmedByCallLogs
+  ) {
+    await appendEvent({
+      type: "eval_skipped",
+      reason: "insufficient_revenue_data",
+      profileKey,
+      targetId: resolvedTargetId,
+      targetName: displayName,
+      rpc,
+      pixelRpc: revenueMeta.pixelRpc,
+      currentTier,
+      desiredTier,
+      revenueSource: revenueMeta.revenueSource,
+      backfillOk: revenueMeta.backfillOk,
+      backfillError: revenueMeta.backfillError || null,
+    });
+    return {
+      action: "skipped",
+      reason: "insufficient_revenue_data",
+      currentTier,
+      desiredTier,
+      rpc,
+      pixelRpc: revenueMeta.pixelRpc,
+    };
+  }
 
   const pState = ensureProfileState(state, profileKey);
 
@@ -606,11 +818,13 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc,
     targetName: displayName,
     targetId: resolvedTargetId,
     rpc,
+    pixelRpc: revenueMeta.pixelRpc,
+    revenueSource: revenueMeta.revenueSource,
     currentTier,
     desiredTier,
     currentPingTreeId,
     desiredPingTreeId,
-    batchSize: batch?.length || CFG.BATCH_SIZE,
+    batchSize: batchForEval?.length || CFG.BATCH_SIZE,
   };
 
   if (CFG.DRY_RUN) {
@@ -870,6 +1084,9 @@ function getHealthPayload() {
     service: "dynamic-ring-tree-target",
     dryRun: CFG.DRY_RUN,
     batchSize: CFG.BATCH_SIZE,
+    revenueBackfillEnabled: CFG.REVENUE_BACKFILL_ENABLED,
+    revenueBackfillDelayMs: CFG.REVENUE_BACKFILL_DELAY_MS,
+    skipDemotionOnUnconfirmedZeroRpc: CFG.SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC,
     enabledProfiles: CFG.getEnabledProfiles().map((p) => p.key),
   };
 }
@@ -882,6 +1099,9 @@ module.exports = {
   getRawTierFromRpc,
   getDesiredTierWithHysteresis,
   computeRpcFromBatch,
+  batchPixelRevenueAllZero,
+  enrichBatchRevenueFromCallLogs,
+  fetchCallRevenuesByInboundCallIds,
   extractProfileTierRingTrees,
   buildFeTargetMap,
   buildTierIdMap,

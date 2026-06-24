@@ -140,6 +140,17 @@ module.exports = {
     parseInt(process.env.DYNAMIC_RING_TREE_MOVE_COOLDOWN_MS || "1800000", 10) || 1800000
   ),
   DRY_RUN: String(process.env.DYNAMIC_RING_TREE_DRY_RUN ?? "true").trim().toLowerCase() !== "false",
+  /** When pixel revenue is all $0 at Completed, refetch conversion from Ringba calllogs before tier eval. */
+  REVENUE_BACKFILL_ENABLED:
+    String(process.env.DYNAMIC_RING_TREE_REVENUE_BACKFILL ?? "true").trim().toLowerCase() !== "false",
+  REVENUE_BACKFILL_DELAY_MS: Math.max(
+    0,
+    parseInt(process.env.DYNAMIC_RING_TREE_REVENUE_BACKFILL_DELAY_MS || "0", 10) || 0
+  ),
+  /** Skip tier-down when RPC is still 0 after backfill (RTB postbacks often lag Completed). */
+  SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC:
+    String(process.env.DYNAMIC_RING_TREE_SKIP_DEMOTION_ON_ZERO_RPC ?? "true").trim().toLowerCase() !==
+    "false",
   STATE_FILE: require("path").join(__dirname, "..", "logs", "dynamic-ring-tree-state.json"),
   EVENTS_FILE: require("path").join(__dirname, "..", "logs", "dynamic-ring-tree-events.jsonl"),
   RINGBA_ACCOUNT_ID: RINGBA_CONFIG.ACCOUNT_ID,
