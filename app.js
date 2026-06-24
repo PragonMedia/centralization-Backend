@@ -80,11 +80,12 @@ const limiter = rateLimit({
   },
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-  // Skip rate limiting for domain-route-details and ringba webhooks
+  // Skip rate limiting for domain-route-details and Ringba webhooks (pixel + conversion)
   skip: (req) => {
     return (
       req.path === "/api/v1/domain-route-details" ||
-      req.path.startsWith("/ringba")
+      req.path.startsWith("/ringba") ||
+      req.path.startsWith("/webhooks/ringba")
     );
   },
 });
