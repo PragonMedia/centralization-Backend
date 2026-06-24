@@ -151,6 +151,10 @@ module.exports = {
   SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC:
     String(process.env.DYNAMIC_RING_TREE_SKIP_DEMOTION_ON_ZERO_RPC ?? "true").trim().toLowerCase() !==
     "false",
+  /** When false (default), always replace pixel revenue with Ringba Insights on batch eval. */
+  REVENUE_BACKFILL_ONLY_ZERO_PIXEL:
+    String(process.env.DYNAMIC_RING_TREE_REVENUE_BACKFILL_ONLY_ZERO_PIXEL ?? "false").trim().toLowerCase() ===
+    "true",
   STATE_FILE: require("path").join(__dirname, "..", "logs", "dynamic-ring-tree-state.json"),
   EVENTS_FILE: require("path").join(__dirname, "..", "logs", "dynamic-ring-tree-events.jsonl"),
   RINGBA_ACCOUNT_ID: RINGBA_CONFIG.ACCOUNT_ID,

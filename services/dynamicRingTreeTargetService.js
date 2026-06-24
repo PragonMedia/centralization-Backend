@@ -132,88 +132,132 @@ function batchPixelRevenueAllZero(batch) {
   return (batch || []).every((c) => parseRevenue(c.revenue) === 0);
 }
 
-function extractCallDetailRecords(data) {
-  if (!data) return [];
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data.calls)) return data.calls;
-  if (Array.isArray(data.callLogs)) return data.callLogs;
-  if (Array.isArray(data.records)) return data.records;
-  if (Array.isArray(data.data)) return data.data;
-  if (data.report && Array.isArray(data.report.records)) return data.report.records;
-  return [];
-}
-
-function parseCallDetailRevenue(record) {
-  if (!record || typeof record !== "object") return 0;
-  const candidates = [
-    record.conversionAmount,
-    record.payoutAmount,
-    record.conversionPayout,
-    record.revenue,
-    record.earnings,
-    record.profit,
-  ];
-  for (const value of candidates) {
-    const parsed = parseRevenue(value);
-    if (parsed > 0) return parsed;
-  }
-  return parseRevenue(candidates.find((v) => v != null && v !== ""));
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getBatchReportWindow(batch) {
+  const times = (batch || [])
+    .map((c) => new Date(c.receivedAt).getTime())
+    .filter((t) => Number.isFinite(t));
+  const end = new Date();
+  const start = new Date(
+    times.length ? Math.min(...times) - 60 * 60 * 1000 : end.getTime() - 7 * 24 * 60 * 60 * 1000
+  );
+  return {
+    reportStart: start.toISOString().replace(/\.\d{3}Z/, "Z"),
+    reportEnd: end.toISOString().replace(/\.\d{3}Z/, "Z"),
+  };
+}
+
+function buildInboundCallIdInsightsBody(callId, reportStart, reportEnd) {
+  return {
+    reportStart,
+    reportEnd,
+    groupByColumns: [{ column: "targetName", displayName: "Target" }],
+    valueColumns: [
+      { column: "conversionAmount", aggregateFunction: null },
+      { column: "callCount", aggregateFunction: null },
+    ],
+    filters: [
+      {
+        anyConditionToMatch: [
+          {
+            column: "inboundCallId",
+            value: callId,
+            isNegativeMatch: false,
+            comparisonType: "EQUALS",
+          },
+        ],
+      },
+    ],
+    maxResultsPerGroup: 10,
+    generateRollups: false,
+    formatTimeZone: "America/New_York",
+  };
+}
+
+function parseInsightsCallRevenue(reportData) {
+  const records = reportData?.report?.records || [];
+  const dataRows = records.filter(
+    (r) => r?.targetName && String(r.targetName).trim().toLowerCase() !== "-no value-"
+  );
+  const rows = dataRows.length > 0 ? dataRows : records;
+  let totalConversion = 0;
+  let totalCalls = 0;
+  for (const row of rows) {
+    const count = parseInt(row.callCount, 10);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    totalConversion += parseRevenue(row.conversionAmount);
+    totalCalls += count;
+  }
+  if (totalCalls <= 0) return 0;
+  if (totalCalls === 1) return Math.round(totalConversion * 10000) / 10000;
+  return Math.round((totalConversion / totalCalls) * 10000) / 10000;
+}
+
 /**
- * Ringba Completed pixels often send conversionAmount=0 (especially RTB).
- * Pull settled revenue from calllogs/details for the batch call IDs.
+ * Ringba calllogs/details is deprecated (404). Use Insights filtered by inboundCallId.
  */
-async function fetchCallRevenuesByInboundCallIds(callIds) {
+async function fetchSingleCallRevenueFromInsights(callId, reportStart, reportEnd) {
+  const response = await ringbaRequest("POST", "/insights", {
+    data: buildInboundCallIdInsightsBody(callId, reportStart, reportEnd),
+    validateStatus: (s) => s >= 200 && s < 500,
+    timeout: 30000,
+  });
+  if (response.status < 200 || response.status >= 300) {
+    return { ok: false, revenue: 0, error: `insights HTTP ${response.status}` };
+  }
+  return { ok: true, revenue: parseInsightsCallRevenue(response.data) };
+}
+
+async function fetchCallRevenuesByInboundCallIds(callIds, options = {}) {
   const unique = [...new Set((callIds || []).map((id) => String(id || "").trim()).filter(Boolean))];
   if (unique.length === 0) return { byId: new Map(), ok: true, fetched: 0 };
 
-  const response = await ringbaRequest("POST", "/calllogs/details", {
-    data: { InboundCallIds: unique },
-    validateStatus: (s) => s >= 200 && s < 500,
-  });
-
-  if (response.status < 200 || response.status >= 300) {
-    return {
-      byId: new Map(),
-      ok: false,
-      fetched: 0,
-      error: `calllogs/details HTTP ${response.status}`,
-    };
-  }
+  const window =
+    options.reportStart && options.reportEnd
+      ? { reportStart: options.reportStart, reportEnd: options.reportEnd }
+      : getBatchReportWindow(options.batch || []);
 
   const byId = new Map();
-  for (const record of extractCallDetailRecords(response.data)) {
-    const id =
-      record.inboundCallId ||
-      record.InboundCallId ||
-      record.callId ||
-      record.id ||
-      record.callUUID;
-    if (!id) continue;
-    byId.set(String(id), parseCallDetailRevenue(record));
+  const errors = [];
+  const chunkSize = 4;
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize);
+    const results = await Promise.all(
+      chunk.map(async (id) => {
+        try {
+          const result = await fetchSingleCallRevenueFromInsights(
+            id,
+            window.reportStart,
+            window.reportEnd
+          );
+          if (!result.ok) errors.push(`${id}: ${result.error}`);
+          return [id, result.revenue];
+        } catch (err) {
+          errors.push(`${id}: ${err.message}`);
+          return [id, 0];
+        }
+      })
+    );
+    for (const [id, revenue] of results) byId.set(id, revenue);
+    if (i + chunkSize < unique.length) await sleep(300);
   }
-  return { byId, ok: true, fetched: byId.size };
+
+  return {
+    byId,
+    ok: errors.length < unique.length,
+    fetched: byId.size,
+    error: errors.length ? errors.slice(0, 3).join("; ") : null,
+    reportStart: window.reportStart,
+    reportEnd: window.reportEnd,
+  };
 }
 
 async function enrichBatchRevenueFromCallLogs(batch, options = {}) {
   const pixelRpc = computeRpcFromBatch(batch);
   const pixelAllZero = batchPixelRevenueAllZero(batch);
-  if (!pixelAllZero) {
-    return {
-      batch,
-      rpc: pixelRpc,
-      pixelRpc,
-      revenueSource: "pixel",
-      backfilled: false,
-      backfillOk: true,
-      hadAnyBackfillRevenue: false,
-    };
-  }
 
   if (!CFG.REVENUE_BACKFILL_ENABLED) {
     return {
@@ -228,19 +272,31 @@ async function enrichBatchRevenueFromCallLogs(batch, options = {}) {
     };
   }
 
+  if (CFG.REVENUE_BACKFILL_ONLY_ZERO_PIXEL && !pixelAllZero) {
+    return {
+      batch,
+      rpc: pixelRpc,
+      pixelRpc,
+      revenueSource: "pixel",
+      backfilled: false,
+      backfillOk: true,
+      hadAnyBackfillRevenue: false,
+    };
+  }
+
   const delayMs = options.delayMs ?? CFG.REVENUE_BACKFILL_DELAY_MS;
   if (delayMs > 0) await sleep(delayMs);
 
   const callIds = (batch || []).map((c) => c.callId);
-  const { byId, ok, error, fetched } = await fetchCallRevenuesByInboundCallIds(callIds);
+  const { byId, ok, error, fetched, reportStart, reportEnd } =
+    await fetchCallRevenuesByInboundCallIds(callIds, { batch });
   const enrichedBatch = (batch || []).map((call) => {
-    const backfilled = byId.get(call.callId);
-    if (backfilled == null) return call;
+    if (!byId.has(call.callId)) return call;
     return {
       ...call,
       pixelRevenue: parseRevenue(call.revenue),
-      revenue: backfilled,
-      revenueSource: "calllogs",
+      revenue: byId.get(call.callId),
+      revenueSource: "insights",
     };
   });
   const rpc = computeRpcFromBatch(enrichedBatch);
@@ -250,11 +306,13 @@ async function enrichBatchRevenueFromCallLogs(batch, options = {}) {
     batch: enrichedBatch,
     rpc,
     pixelRpc,
-    revenueSource: hadAnyBackfillRevenue ? "calllogs" : "pixel",
+    revenueSource: hadAnyBackfillRevenue || fetched > 0 ? "insights" : "pixel",
     backfilled: true,
     backfillOk: ok,
     backfillError: error || null,
     backfillFetched: fetched,
+    backfillReportStart: reportStart,
+    backfillReportEnd: reportEnd,
     hadAnyBackfillRevenue,
   };
 }
@@ -689,6 +747,9 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc:
         backfillError: enriched.backfillError || null,
         backfillFetched: enriched.backfillFetched || 0,
         hadAnyBackfillRevenue: enriched.hadAnyBackfillRevenue,
+        revenueSource: enriched.revenueSource,
+        backfillReportStart: enriched.backfillReportStart || null,
+        backfillReportEnd: enriched.backfillReportEnd || null,
       });
     }
   }
@@ -1086,6 +1147,7 @@ function getHealthPayload() {
     batchSize: CFG.BATCH_SIZE,
     revenueBackfillEnabled: CFG.REVENUE_BACKFILL_ENABLED,
     revenueBackfillDelayMs: CFG.REVENUE_BACKFILL_DELAY_MS,
+    revenueBackfillOnlyZeroPixel: CFG.REVENUE_BACKFILL_ONLY_ZERO_PIXEL,
     skipDemotionOnUnconfirmedZeroRpc: CFG.SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC,
     enabledProfiles: CFG.getEnabledProfiles().map((p) => p.key),
   };
