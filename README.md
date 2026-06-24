@@ -63,6 +63,7 @@ Merged into main API (port 3000). **Final Expense** uses fixed ping tree IDs for
 - `GET /api/v1/ring-tree-target/health`
 - `GET /api/v1/ring-tree-target/status?profile=fe`
 - `GET /api/v1/ring-tree-target/profiles`
+- `GET /api/v1/ring-tree-target/fe-ring-trees` — live FE Tier 1/2/3 ring trees + targets (`?enabledOnly=true` optional)
 - `POST /api/v1/ring-tree-target/test/simulate-batch` — test 15-call batch
 - `POST /api/v1/ring-tree-target/test/reset?profile=fe` — clear test state
 

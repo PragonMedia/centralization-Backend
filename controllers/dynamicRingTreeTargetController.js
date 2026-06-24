@@ -36,6 +36,23 @@ exports.profiles = async (req, res) => {
   return res.status(200).json({ ok: true, profiles });
 };
 
+/** GET /api/v1/ring-tree-target/fe-ring-trees — live FE Tier 1/2/3 + targets from Ringba */
+exports.getFeRingTrees = async (req, res) => {
+  try {
+    const enabledOnly = ["1", "true", "yes"].includes(
+      String(req.query?.enabledOnly ?? "").trim().toLowerCase()
+    );
+    const payload = await dynamicRingTreeTargetService.listFeRingTreesWithTargets({
+      profileKey: "fe",
+      enabledOnly,
+    });
+    return res.status(payload.ok ? 200 : 502).json(payload);
+  } catch (err) {
+    console.error("RingTreeTarget getFeRingTrees error:", err);
+    return res.status(500).json({ ok: false, error: err.message, ringTrees: [] });
+  }
+};
+
 /** Ringba tracking pixel — GET/POST query params */
 exports.handleTierRpcPixel = async (req, res) => {
   try {

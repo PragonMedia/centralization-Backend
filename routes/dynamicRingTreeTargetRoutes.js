@@ -10,6 +10,7 @@ const dynamicRingTreeTargetController = require("../controllers/dynamicRingTreeT
 router.get("/health", dynamicRingTreeTargetController.health);
 router.get("/status", dynamicRingTreeTargetController.status);
 router.get("/profiles", dynamicRingTreeTargetController.profiles);
+router.get("/fe-ring-trees", dynamicRingTreeTargetController.getFeRingTrees);
 
 router.post("/test/simulate-batch", dynamicRingTreeTargetController.simulateBatch);
 router.post("/test/single", dynamicRingTreeTargetController.simulateSingle);

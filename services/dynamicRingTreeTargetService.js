@@ -204,6 +204,109 @@ async function fetchPingTrees() {
   return [];
 }
 
+function normalizePingTreeTarget(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const id = raw.id || raw.uid || raw.targetId || null;
+  const name = raw.name || raw.attributes?.name || null;
+  if (!id) return null;
+  const enabled = raw.enabled !== false && raw.attributes?.enabled !== false;
+  return {
+    id: String(id),
+    name: name ? String(name) : null,
+    enabled,
+  };
+}
+
+function normalizePingTreeRow(raw, profileTier) {
+  if (!raw) {
+    return {
+      name: profileTier?.name || null,
+      pingTreeId: profileTier?.pingTreeId || null,
+      configuredPingTreeId: profileTier?.pingTreeId || null,
+      foundInRingba: false,
+      targetCount: 0,
+      enabledTargetCount: 0,
+      targets: [],
+    };
+  }
+  const name = raw?.name || raw?.attributes?.name || profileTier?.name || null;
+  const pingTreeId = raw?.id || raw?.uid || raw?.pingTreeId || profileTier?.pingTreeId || null;
+  const rawTargets = raw?.targets || raw?.attributes?.targets || [];
+  const targets = rawTargets.map(normalizePingTreeTarget).filter(Boolean);
+  return {
+    name,
+    pingTreeId,
+    configuredPingTreeId: profileTier?.pingTreeId || null,
+    foundInRingba: true,
+    targetCount: targets.length,
+    enabledTargetCount: targets.filter((t) => t.enabled).length,
+    targets,
+  };
+}
+
+/**
+ * Live list of FE Tier 1/2/3 ring trees and targets from Ringba pingtrees API.
+ */
+async function listFeRingTreesWithTargets(options = {}) {
+  const profileKey = (options.profileKey || "fe").trim().toLowerCase();
+  const profile = CFG.getProfile(profileKey);
+  if (!profile) {
+    return {
+      ok: false,
+      error: `Profile "${profileKey}" is not configured`,
+      profile: profileKey,
+      ringTrees: [],
+    };
+  }
+
+  const enabledOnly = options.enabledOnly === true;
+  let pingTrees;
+  try {
+    pingTrees = await fetchPingTrees();
+  } catch (err) {
+    return {
+      ok: false,
+      error: err.message || "Failed to fetch pingtrees from Ringba",
+      profile: profileKey,
+      ringTrees: [],
+    };
+  }
+
+  const feTreesFromApi = extractProfileTierRingTrees(pingTrees, profile);
+  const apiByName = new Map(
+    feTreesFromApi.map((tree) => [tree?.name || tree?.attributes?.name, tree])
+  );
+
+  const ringTrees = (profile.tiers || []).map((tier) => {
+    const row = normalizePingTreeRow(apiByName.get(tier.name), tier);
+    if (!enabledOnly) return row;
+    const enabledTargets = row.targets.filter((t) => t.enabled);
+    return {
+      ...row,
+      targets: enabledTargets,
+      targetCount: enabledTargets.length,
+      enabledTargetCount: enabledTargets.length,
+    };
+  });
+
+  const totalTargets = ringTrees.reduce((sum, t) => sum + t.targetCount, 0);
+  const enabledTargets = ringTrees.reduce((sum, t) => sum + t.enabledTargetCount, 0);
+
+  return {
+    ok: true,
+    profile: profileKey,
+    label: profile.label,
+    fetchedAt: new Date().toISOString(),
+    ringTrees,
+    summary: {
+      ringTreeCount: ringTrees.length,
+      foundInRingba: ringTrees.filter((t) => t.foundInRingba).length,
+      totalTargets,
+      enabledTargets,
+    },
+  };
+}
+
 function parsePixelParams(query = {}, body = {}) {
   const src = { ...query, ...body };
   const pick = (...keys) => {
@@ -783,6 +886,8 @@ module.exports = {
   buildFeTargetMap,
   buildTierIdMap,
   fetchPingTrees,
+  listFeRingTreesWithTargets,
+  normalizePingTreeTarget,
   ingestPixelCall,
   evaluateBatchMove,
   handlePixelIngest,
