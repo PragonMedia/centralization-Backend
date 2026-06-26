@@ -1139,6 +1139,58 @@ async function resetProfileState(profileKey) {
   return { ok: true, profileKey: profileKey || "all" };
 }
 
+/**
+ * Clear in-progress batches (batch + seenCallIds) for all targets.
+ * Preserves lastMoveAt cooldowns. Runs daily at 1am ET by default.
+ */
+async function clearAllOpenBatches(options = {}) {
+  const state = await loadState();
+  let targetsCleared = 0;
+  let callsCleared = 0;
+  const clearedByProfile = {};
+
+  for (const [profileKey, pState] of Object.entries(state.profiles || {})) {
+    if (!pState?.targets) continue;
+    let profileTargets = 0;
+    let profileCalls = 0;
+
+    for (const [targetId, tState] of Object.entries(pState.targets)) {
+      const batchLen = tState.batch?.length || 0;
+      const seenLen = tState.seenCallIds?.length || 0;
+      if (batchLen === 0 && seenLen === 0) continue;
+
+      profileCalls += batchLen;
+      profileTargets += 1;
+      delete pState.targets[targetId];
+    }
+
+    if (profileTargets > 0) {
+      clearedByProfile[profileKey] = { targetsCleared: profileTargets, callsCleared: profileCalls };
+      targetsCleared += profileTargets;
+      callsCleared += profileCalls;
+    }
+  }
+
+  await saveState(state);
+
+  const summary = {
+    ok: true,
+    targetsCleared,
+    callsCleared,
+    clearedByProfile,
+    trigger: options.trigger || "manual",
+  };
+
+  if (targetsCleared > 0 || options.trigger) {
+    await appendEvent({
+      type: "batch_daily_reset",
+      ...summary,
+    });
+  }
+
+  return summary;
+}
+
 function getHealthPayload() {
   return {
     ok: true,
@@ -1149,6 +1201,9 @@ function getHealthPayload() {
     revenueBackfillDelayMs: CFG.REVENUE_BACKFILL_DELAY_MS,
     revenueBackfillOnlyZeroPixel: CFG.REVENUE_BACKFILL_ONLY_ZERO_PIXEL,
     skipDemotionOnUnconfirmedZeroRpc: CFG.SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC,
+    dailyBatchResetEnabled: CFG.DAILY_BATCH_RESET_ENABLED,
+    dailyBatchResetHour: CFG.DAILY_BATCH_RESET_HOUR,
+    dailyBatchResetTimezone: CFG.DAILY_BATCH_RESET_TIMEZONE,
     enabledProfiles: CFG.getEnabledProfiles().map((p) => p.key),
   };
 }
@@ -1181,5 +1236,6 @@ module.exports = {
   getStatus,
   simulateTestBatch,
   resetProfileState,
+  clearAllOpenBatches,
   getHealthPayload,
 };

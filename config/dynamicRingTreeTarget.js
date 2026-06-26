@@ -155,6 +155,16 @@ module.exports = {
   REVENUE_BACKFILL_ONLY_ZERO_PIXEL:
     String(process.env.DYNAMIC_RING_TREE_REVENUE_BACKFILL_ONLY_ZERO_PIXEL ?? "false").trim().toLowerCase() ===
     "true",
+  /** Clear open RPC batches daily so partial counts do not carry overnight. */
+  DAILY_BATCH_RESET_ENABLED:
+    String(process.env.DYNAMIC_RING_TREE_DAILY_BATCH_RESET ?? "true").trim().toLowerCase() !== "false",
+  DAILY_BATCH_RESET_TIMEZONE: (
+    process.env.DYNAMIC_RING_TREE_DAILY_BATCH_RESET_TIMEZONE || "America/New_York"
+  ).trim(),
+  DAILY_BATCH_RESET_HOUR: Math.min(
+    23,
+    Math.max(0, parseInt(process.env.DYNAMIC_RING_TREE_DAILY_BATCH_RESET_HOUR || "1", 10) || 1)
+  ),
   STATE_FILE: require("path").join(__dirname, "..", "logs", "dynamic-ring-tree-state.json"),
   EVENTS_FILE: require("path").join(__dirname, "..", "logs", "dynamic-ring-tree-events.jsonl"),
   RINGBA_ACCOUNT_ID: RINGBA_CONFIG.ACCOUNT_ID,
