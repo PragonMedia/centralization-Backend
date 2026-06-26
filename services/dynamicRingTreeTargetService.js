@@ -663,41 +663,101 @@ async function removeTargetFromPingTree(pingTreeId, targetId) {
   );
 }
 
-async function getPingTreeTargetConfig(targetId) {
-  const response = await ringbaRequest("GET", `/pingtreetargets/${encodeURIComponent(targetId)}`);
-  return response.data?.target || response.data?.data || response.data;
+function ringbaResponseError(res) {
+  const data = res?.data;
+  if (typeof data === "string" && data.trim()) return data.trim();
+  if (data?.message) {
+    const extra = Array.isArray(data.errors) ? data.errors.filter(Boolean).join("; ") : "";
+    return extra ? `${data.message}: ${extra}` : data.message;
+  }
+  if (Array.isArray(data?.errors) && data.errors.length) return data.errors.join("; ");
+  try {
+    return JSON.stringify(data || {}).slice(0, 500);
+  } catch {
+    return `HTTP ${res?.status || "error"}`;
+  }
 }
 
-async function addTargetToPingTree(sourceTargetId, destPingTreeId) {
-  const patchBodies = [
-    { targetIds: [sourceTargetId] },
-    { targets: [{ id: sourceTargetId }] },
-    { ids: [sourceTargetId] },
-  ];
+async function getPingTreeTargetConfig(targetId) {
+  const response = await ringbaRequest("GET", `/pingtreetargets/${encodeURIComponent(targetId)}`);
+  return (
+    response.data?.pingTreeTarget ||
+    response.data?.target ||
+    response.data?.data ||
+    response.data
+  );
+}
 
-  for (const body of patchBodies) {
-    try {
-      const res = await ringbaRequest("PATCH", `/pingtrees/${encodeURIComponent(destPingTreeId)}/Targets`, {
-        data: body,
-        validateStatus: (s) => s >= 200 && s < 500,
-      });
-      if (res.status >= 200 && res.status < 300) {
-        return { method: "PATCH", body, status: res.status, data: res.data };
-      }
-    } catch {
-      /* try next */
+function buildPingTreeTargetClone(config, destPingTreeId) {
+  const clone = { ...(config || {}) };
+  for (const key of [
+    "id",
+    "version",
+    "accountId",
+    "generation",
+    "stats",
+    "caps",
+    "transactionId",
+    "pingTreeTarget",
+  ]) {
+    delete clone[key];
+  }
+  clone.pingTreeId = destPingTreeId;
+  return clone;
+}
+
+function extractPingTreeTargetIdFromAddResponse(data, fallbackId) {
+  const fromTargets = data?.targets?.[0]?.id;
+  const fromEntity = data?.pingTreeTarget?.id || data?.target?.id;
+  return fromTargets || fromEntity || fallbackId;
+}
+
+/**
+ * Add an existing ping-tree target to a ring tree.
+ * Ringba pingTreeAddTargets expects { targetId } (not targetIds array).
+ */
+async function addTargetToPingTree(sourceTargetId, destPingTreeId, options = {}) {
+  const patchRes = await ringbaRequest(
+    "PATCH",
+    `/pingtrees/${encodeURIComponent(destPingTreeId)}/Targets`,
+    {
+      data: { targetId: sourceTargetId },
+      validateStatus: (s) => s >= 200 && s < 500,
     }
+  );
+  if (patchRes.status >= 200 && patchRes.status < 300) {
+    return {
+      method: "PATCH",
+      targetId: extractPingTreeTargetIdFromAddResponse(patchRes.data, sourceTargetId),
+      status: patchRes.status,
+      data: patchRes.data,
+    };
   }
 
-  const config = await getPingTreeTargetConfig(sourceTargetId);
-  const clone = { ...(config || {}) };
-  delete clone.id;
-  delete clone.version;
-  delete clone.accountId;
-  clone.pingTreeId = destPingTreeId;
+  const patchError = ringbaResponseError(patchRes);
+  const config = options.preDeleteConfig || (await getPingTreeTargetConfig(sourceTargetId));
+  if (!config?.name || !config?.url) {
+    throw new Error(
+      `Add to ping tree failed (PATCH ${patchRes.status}: ${patchError}); missing target config for clone`
+    );
+  }
 
-  const postRes = await ringbaRequest("POST", "/pingtreetargets", { data: clone });
-  return { method: "POST", status: postRes.status, data: postRes.data };
+  const postRes = await ringbaRequest("POST", "/pingtreetargets", {
+    data: buildPingTreeTargetClone(config, destPingTreeId),
+    validateStatus: (s) => s >= 200 && s < 500,
+  });
+  if (postRes.status < 200 || postRes.status >= 300) {
+    throw new Error(
+      `Add to ping tree failed (PATCH ${patchRes.status}: ${patchError}; POST ${postRes.status}: ${ringbaResponseError(postRes)})`
+    );
+  }
+
+  return {
+    method: "POST",
+    targetId: extractPingTreeTargetIdFromAddResponse(postRes.data, sourceTargetId),
+    status: postRes.status,
+    data: postRes.data,
+  };
 }
 
 async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc: initialRpc, state }) {
@@ -903,16 +963,25 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc:
     return { action: "dry_run_move", ...moveSummary };
   }
 
+  let preDeleteConfig = null;
   try {
+    preDeleteConfig = await getPingTreeTargetConfig(resolvedTargetId);
     await removeTargetFromPingTree(currentPingTreeId, resolvedTargetId);
-    const addResult = await addTargetToPingTree(resolvedTargetId, desiredPingTreeId);
-    pState.lastMoveAt[resolvedTargetId] = new Date().toISOString();
-    // After tier move Ringba assigns a new RTT id — next pixel uses new targetId and starts a fresh batch.
+    const addResult = await addTargetToPingTree(resolvedTargetId, desiredPingTreeId, {
+      preDeleteConfig,
+    });
+    const finalTargetId = addResult.targetId || resolvedTargetId;
+    pState.lastMoveAt[finalTargetId] = new Date().toISOString();
+    if (finalTargetId !== resolvedTargetId) {
+      delete pState.lastMoveAt[resolvedTargetId];
+    }
+    // After tier move Ringba may assign a new RTT id — next pixel uses new targetId and starts a fresh batch.
     delete pState.targets[resolvedTargetId];
     await appendEvent({
       type: "move_completed",
       ...moveSummary,
       addMethod: addResult.method,
+      finalTargetId: finalTargetId !== resolvedTargetId ? finalTargetId : undefined,
     });
     await slackService.sendSlackMessage(
       formatRingTreeMoveSlackMessage({
@@ -926,13 +995,28 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc:
     console.log("[ring-tree-target][move_completed]", moveSummary);
     return { action: "move_completed", ...moveSummary, addResult };
   } catch (err) {
+    let rollbackError = null;
+    if (preDeleteConfig && currentPingTreeId && currentPingTreeId !== desiredPingTreeId) {
+      try {
+        await addTargetToPingTree(resolvedTargetId, currentPingTreeId, { preDeleteConfig });
+      } catch (rollbackErr) {
+        rollbackError = rollbackErr.message;
+      }
+    }
     await appendEvent({
       type: "move_failed",
       ...moveSummary,
       error: err.message,
+      rollbackError,
     });
     await slackService.sendSlackMessage(
-      `Ring Tree move FAILED (${profile.label})\nTarget: ${displayName} (${resolvedTargetId})\nError: ${err.message}`
+      `Ring Tree move FAILED (${profile.label})\nTarget: ${displayName} (${resolvedTargetId})\nError: ${err.message}${
+        rollbackError
+          ? `\nRollback to ${shortTierLabel(currentTier)} also failed: ${rollbackError}`
+          : preDeleteConfig
+            ? `\nRollback to ${shortTierLabel(currentTier)} attempted.`
+            : ""
+      }`
     );
     console.error("[ring-tree-target][move_failed]", err.message);
     return { action: "move_failed", ...moveSummary, error: err.message };
