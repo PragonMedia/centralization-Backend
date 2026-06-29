@@ -84,6 +84,7 @@ const limiter = rateLimit({
   skip: (req) => {
     return (
       req.path === "/api/v1/domain-route-details" ||
+      req.path.startsWith("/api/v1/accounting") ||
       req.path.startsWith("/ringba") ||
       req.path.startsWith("/webhooks/ringba")
     );
