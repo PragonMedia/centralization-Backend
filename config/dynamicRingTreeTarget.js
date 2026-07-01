@@ -18,6 +18,22 @@ function tier(name, pingTreeId) {
   return { name, pingTreeId: (pingTreeId || "").trim() };
 }
 
+const FE_RPC_RULES = { mode: "min", tier1Min: 30, tier2Min: 20 };
+const FE_HYSTERESIS = {
+  promoteToTier1: 31,
+  demoteFromTier1: 29,
+  promoteToTier2: 21,
+  demoteFromTier2: 19,
+};
+
+const MEDICARE_RPC_RULES = { mode: "above", tier1Above: 11, tier2Min: 8 };
+const MEDICARE_HYSTERESIS = {
+  promoteToTier1: 11.5,
+  demoteFromTier1: 10.5,
+  promoteToTier2: 8.5,
+  demoteFromTier2: 7.5,
+};
+
 /** Default profiles — FE live; others disabled until ping tree IDs are set. */
 const DEFAULT_PROFILES = {
   fe: {
@@ -25,6 +41,8 @@ const DEFAULT_PROFILES = {
     label: "Final Expense",
     enabled: true,
     targetNamePrefix: "FE -",
+    rpcRules: FE_RPC_RULES,
+    hysteresis: FE_HYSTERESIS,
     tiers: [
       tier("FE - Tier 1", process.env.DYNAMIC_RING_TREE_FE_TIER1_ID || "PI943e1abfb7c84cbdbdf12b5fed5db525"),
       tier("FE - Tier 2", process.env.DYNAMIC_RING_TREE_FE_TIER2_ID || "PIfd7e2f930c1943dda25f3cfc290c1d9c"),
@@ -35,11 +53,24 @@ const DEFAULT_PROFILES = {
     key: "medicare",
     label: "Medicare",
     enabled: process.env.DYNAMIC_RING_TREE_MEDICARE_ENABLED === "true",
-    targetNamePrefix: "MED -",
+    campaignName: "Paragon - Medicare",
+    dryRun: process.env.DYNAMIC_RING_TREE_MEDICARE_DRY_RUN !== "false",
+    targetNamePrefix: "Medi -",
+    rpcRules: MEDICARE_RPC_RULES,
+    hysteresis: MEDICARE_HYSTERESIS,
     tiers: [
-      tier("MED - Tier 1", process.env.DYNAMIC_RING_TREE_MEDICARE_TIER1_ID || ""),
-      tier("MED - Tier 2", process.env.DYNAMIC_RING_TREE_MEDICARE_TIER2_ID || ""),
-      tier("MED - Tier 3", process.env.DYNAMIC_RING_TREE_MEDICARE_TIER3_ID || ""),
+      tier(
+        "Medire - Tier 1",
+        process.env.DYNAMIC_RING_TREE_MEDICARE_TIER1_ID || "PI27c8553f1e9e495c90b1065063374ea7"
+      ),
+      tier(
+        "Medire - Tier 2",
+        process.env.DYNAMIC_RING_TREE_MEDICARE_TIER2_ID || "PI3a999008ead2425e82dbf9fc9fbddb32"
+      ),
+      tier(
+        "Medire - Tier 3",
+        process.env.DYNAMIC_RING_TREE_MEDICARE_TIER3_ID || "PI91698bc56b9a41c3bc8e1a5a1775ea44"
+      ),
     ],
   },
   debt: {
@@ -76,6 +107,12 @@ function mergeProfile(base, override) {
       ...(base.tiers[i] || {}),
       ...t,
     }));
+  }
+  if (override.rpcRules && typeof override.rpcRules === "object") {
+    merged.rpcRules = { ...(base.rpcRules || {}), ...override.rpcRules };
+  }
+  if (override.hysteresis && typeof override.hysteresis === "object") {
+    merged.hysteresis = { ...(base.hysteresis || {}), ...override.hysteresis };
   }
   return merged;
 }
@@ -125,16 +162,41 @@ function resolveProfileKeyFromTargetName(targetName, explicitKey) {
   return null;
 }
 
+function resolveProfileKeyFromCampaignName(campaignName, explicitKey) {
+  if (explicitKey) {
+    const k = String(explicitKey).trim().toLowerCase();
+    if (getProfiles()[k]) return k;
+  }
+  const name = String(campaignName || "").trim();
+  if (!name) return null;
+  for (const profile of Object.values(getProfiles())) {
+    if (!profile.enabled) continue;
+    if (profile.campaignName && profile.campaignName === name) return profile.key;
+  }
+  return null;
+}
+
+function getProfileRpcRules(profile) {
+  if (profile?.rpcRules) return profile.rpcRules;
+  return FE_RPC_RULES;
+}
+
+function getProfileHysteresis(profile) {
+  if (profile?.hysteresis) return profile.hysteresis;
+  return FE_HYSTERESIS;
+}
+
+/** Per-profile dry-run when set; otherwise global DYNAMIC_RING_TREE_DRY_RUN (FE on prod). */
+function isProfileDryRun(profile) {
+  if (profile && typeof profile.dryRun === "boolean") return profile.dryRun;
+  return String(process.env.DYNAMIC_RING_TREE_DRY_RUN ?? "true").trim().toLowerCase() !== "false";
+}
+
 module.exports = {
   BATCH_SIZE: Math.max(1, parseInt(process.env.DYNAMIC_RING_TREE_BATCH_SIZE || "15", 10) || 15),
-  RPC_TIER1_MIN: 30,
-  RPC_TIER2_MIN: 20,
-  HYSTERESIS: {
-    promoteToTier1: 31,
-    demoteFromTier1: 29,
-    promoteToTier2: 21,
-    demoteFromTier2: 19,
-  },
+  RPC_TIER1_MIN: FE_RPC_RULES.tier1Min,
+  RPC_TIER2_MIN: FE_RPC_RULES.tier2Min,
+  HYSTERESIS: FE_HYSTERESIS,
   MOVE_COOLDOWN_MS: Math.max(
     0,
     parseInt(process.env.DYNAMIC_RING_TREE_MOVE_COOLDOWN_MS || "1800000", 10) || 1800000
@@ -175,4 +237,8 @@ module.exports = {
   getEnabledProfiles,
   isProfileConfigured,
   resolveProfileKeyFromTargetName,
+  resolveProfileKeyFromCampaignName,
+  getProfileRpcRules,
+  getProfileHysteresis,
+  isProfileDryRun,
 };

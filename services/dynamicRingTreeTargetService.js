@@ -95,8 +95,16 @@ function getRawTierFromRpc(rpc, profile) {
   const t1 = profile?.tiers?.[0]?.name || "FE - Tier 1";
   const t2 = profile?.tiers?.[1]?.name || "FE - Tier 2";
   const t3 = profile?.tiers?.[2]?.name || "FE - Tier 3";
-  if (rpc >= CFG.RPC_TIER1_MIN) return t1;
-  if (rpc >= CFG.RPC_TIER2_MIN) return t2;
+  const rules = CFG.getProfileRpcRules(profile);
+
+  if (rules.mode === "above") {
+    if (rpc > rules.tier1Above) return t1;
+    if (rpc >= rules.tier2Min) return t2;
+    return t3;
+  }
+
+  if (rpc >= rules.tier1Min) return t1;
+  if (rpc >= rules.tier2Min) return t2;
   return t3;
 }
 
@@ -104,10 +112,12 @@ function getDesiredTierWithHysteresis(rpc, currentTier, profile) {
   const t1 = profile.tiers[0].name;
   const t2 = profile.tiers[1].name;
   const t3 = profile.tiers[2].name;
-  const h = CFG.HYSTERESIS;
+  const h = CFG.getProfileHysteresis(profile);
+  const rules = CFG.getProfileRpcRules(profile);
+  const tier2Floor = rules.mode === "above" ? rules.tier2Min : rules.tier2Min;
 
   if (currentTier === t1) {
-    if (rpc < h.demoteFromTier1) return rpc >= CFG.RPC_TIER2_MIN ? t2 : t3;
+    if (rpc < h.demoteFromTier1) return rpc >= tier2Floor ? t2 : t3;
     return t1;
   }
   if (currentTier === t2) {
@@ -520,6 +530,7 @@ function parsePixelParams(query = {}, body = {}) {
     callerPhone: pick("callerPhone", "caller_phone", "phone", "ani"),
     revenue: pick("revenue", "conversionAmount", "conversion_amount", "conversionPayout", "payout", "payoutAmount"),
     profileKey: pick("vertical", "profile", "campaignVertical"),
+    campaignName: pick("campaignName", "campaign_name", "campaign"),
   };
 }
 
@@ -536,6 +547,7 @@ function ingestPixelCall(state, payload, profileKey) {
     };
   }
 
+  const profileDryRun = CFG.isProfileDryRun(profile);
   const { callId, targetId, targetName, callerPhone, revenue } = payload;
 
   const ignoreReason = getIgnoreReason(payload);
@@ -548,7 +560,7 @@ function ingestPixelCall(state, payload, profileKey) {
         reason: ignoreReason,
         message: "Completed call with no accepting target — skipped",
         profileKey,
-        dryRun: CFG.DRY_RUN,
+        dryRun: profileDryRun,
       },
     };
   }
@@ -581,7 +593,7 @@ function ingestPixelCall(state, payload, profileKey) {
         targetId,
         targetName: targetState.targetName,
         batchSize: targetState.batch.length,
-        dryRun: CFG.DRY_RUN,
+        dryRun: profileDryRun,
       },
     };
   }
@@ -597,7 +609,7 @@ function ingestPixelCall(state, payload, profileKey) {
         targetId,
         targetName: targetState.targetName,
         batchSize: targetState.batch.length,
-        dryRun: CFG.DRY_RUN,
+        dryRun: profileDryRun,
       },
     };
   }
@@ -621,7 +633,7 @@ function ingestPixelCall(state, payload, profileKey) {
         targetName: targetState.targetName,
         batchSize: targetState.batch.length,
         rpc: null,
-        dryRun: CFG.DRY_RUN,
+        dryRun: profileDryRun,
       },
     };
   }
@@ -642,7 +654,7 @@ function ingestPixelCall(state, payload, profileKey) {
       batchSize: CFG.BATCH_SIZE,
       batch: batchCopy,
       rpc,
-      dryRun: CFG.DRY_RUN,
+      dryRun: profileDryRun,
     },
     shouldEval: true,
     evalPayload: { profileKey, targetId, targetName: targetState.targetName, batch: batchCopy, rpc },
@@ -948,7 +960,9 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc:
     batchSize: batchForEval?.length || CFG.BATCH_SIZE,
   };
 
-  if (CFG.DRY_RUN) {
+  const profileDryRun = CFG.isProfileDryRun(profile);
+
+  if (profileDryRun) {
     await appendEvent({ type: "dry_run_move", ...moveSummary, action: "dry_run_move" });
     await slackService.sendSlackMessage(
       formatRingTreeMoveSlackMessage({
@@ -1060,6 +1074,7 @@ async function handlePixelIngest(query, body) {
 
   const profileKey =
     CFG.resolveProfileKeyFromTargetName(params.targetName, params.profileKey) ||
+    CFG.resolveProfileKeyFromCampaignName(params.campaignName, params.profileKey) ||
     (params.profileKey ? String(params.profileKey).trim().toLowerCase() : "") ||
     "fe";
 
@@ -1153,6 +1168,9 @@ async function getStatus(profileKeyFilter) {
     enabledProfiles: CFG.getEnabledProfiles().map((p) => ({
       key: p.key,
       label: p.label,
+      dryRun: CFG.isProfileDryRun(p),
+      campaignName: p.campaignName || null,
+      rpcRules: CFG.getProfileRpcRules(p),
       tiers: p.tiers.map((t) => ({ name: t.name, pingTreeId: t.pingTreeId })),
     })),
     targetCount: targets.length,
@@ -1276,6 +1294,7 @@ async function clearAllOpenBatches(options = {}) {
 }
 
 function getHealthPayload() {
+  const profiles = CFG.getProfiles();
   return {
     ok: true,
     service: "dynamic-ring-tree-target",
@@ -1289,6 +1308,12 @@ function getHealthPayload() {
     dailyBatchResetHour: CFG.DAILY_BATCH_RESET_HOUR,
     dailyBatchResetTimezone: CFG.DAILY_BATCH_RESET_TIMEZONE,
     enabledProfiles: CFG.getEnabledProfiles().map((p) => p.key),
+    profiles: Object.values(profiles).map((p) => ({
+      key: p.key,
+      enabled: CFG.isProfileConfigured(p),
+      dryRun: CFG.isProfileDryRun(p),
+      campaignName: p.campaignName || null,
+    })),
   };
 }
 
