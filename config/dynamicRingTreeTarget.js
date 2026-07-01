@@ -60,15 +60,15 @@ const DEFAULT_PROFILES = {
     hysteresis: MEDICARE_HYSTERESIS,
     tiers: [
       tier(
-        "Medire - Tier 1",
+        "Medicare - Tier 1",
         process.env.DYNAMIC_RING_TREE_MEDICARE_TIER1_ID || "PI27c8553f1e9e495c90b1065063374ea7"
       ),
       tier(
-        "Medire - Tier 2",
+        "Medicare  - Tier 2",
         process.env.DYNAMIC_RING_TREE_MEDICARE_TIER2_ID || "PI3a999008ead2425e82dbf9fc9fbddb32"
       ),
       tier(
-        "Medire - Tier 3",
+        "Medicare  - Tier 3",
         process.env.DYNAMIC_RING_TREE_MEDICARE_TIER3_ID || "PI91698bc56b9a41c3bc8e1a5a1775ea44"
       ),
     ],

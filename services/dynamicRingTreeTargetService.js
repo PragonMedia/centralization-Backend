@@ -361,13 +361,14 @@ async function ringbaRequest(method, relativePath, options = {}) {
 
 function extractProfileTierRingTrees(pingTrees, profile) {
   const tierNames = new Set((profile.tiers || []).map((t) => t.name));
-  const tierIdByName = new Map((profile.tiers || []).map((t) => [t.name, t.pingTreeId]));
+  const tierIdSet = new Set((profile.tiers || []).map((t) => t.pingTreeId).filter(Boolean));
   const list = Array.isArray(pingTrees) ? pingTrees : [];
   return list.filter((tree) => {
     const name = tree?.name || tree?.attributes?.name || "";
-    if (!tierNames.has(name)) return false;
     const id = tree?.id || tree?.uid || tree?.pingTreeId || "";
-    const expected = tierIdByName.get(name);
+    if (tierIdSet.has(id)) return true;
+    if (!tierNames.has(name)) return false;
+    const expected = (profile.tiers || []).find((t) => t.name === name)?.pingTreeId;
     return !expected || id === expected;
   });
 }
