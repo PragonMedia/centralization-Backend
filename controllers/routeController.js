@@ -1424,26 +1424,68 @@ exports.deleteDomain = async (req, res) => {
     );
 
     // --- Cleanup Cloudflare & RedTrack resources ---
+    let cloudflareDnsCleanup = domainDoc.cloudflareZoneId
+      ? "pending"
+      : "No Cloudflare zone";
+    let cloudflareCachePurge = domainDoc.cloudflareZoneId
+      ? "pending"
+      : "No Cloudflare zone";
+    let redtrackCleanup = domainDoc.redtrackDomainId
+      ? "pending"
+      : "No RedTrack domain";
+
     try {
-      // 1. Delete DNS records from Cloudflare
+      // 1. Purge Cloudflare cache for this zone (before DNS teardown)
       if (domainDoc.cloudflareZoneId) {
-        console.log(`🔄 Deleting DNS records for ${domain}...`);
-        await cloudflareService.deleteDNSRecords(
-          domainDoc.cloudflareZoneId,
-          domain
-        );
-        console.log(`✅ Cloudflare DNS records deleted for ${domain}`);
+        try {
+          console.log(`🔄 Purging Cloudflare cache for ${domain}...`);
+          await cloudflareService.purgeCache(domainDoc.cloudflareZoneId);
+          cloudflareCachePurge = "Cache purged";
+          console.log(`✅ Cloudflare cache purged for ${domain}`);
+        } catch (purgeError) {
+          cloudflareCachePurge = `Failed: ${purgeError.message}`;
+          console.error(
+            `⚠️  Cloudflare cache purge failed for ${domain}:`,
+            purgeError.message
+          );
+        }
+
+        // 2. Delete DNS records from Cloudflare
+        try {
+          console.log(`🔄 Deleting DNS records for ${domain}...`);
+          await cloudflareService.deleteDNSRecords(
+            domainDoc.cloudflareZoneId,
+            domain
+          );
+          cloudflareDnsCleanup = "DNS records deleted";
+          console.log(`✅ Cloudflare DNS records deleted for ${domain}`);
+        } catch (dnsError) {
+          cloudflareDnsCleanup = `Failed: ${dnsError.message}`;
+          console.error(
+            `⚠️  Cloudflare DNS cleanup failed for ${domain}:`,
+            dnsError.message
+          );
+        }
       } else {
         console.log(
-          `ℹ️  No Cloudflare zone ID found for ${domain}, skipping DNS cleanup`
+          `ℹ️  No Cloudflare zone ID found for ${domain}, skipping Cloudflare cleanup`
         );
       }
 
-      // 2. Delete domain from RedTrack
+      // 3. Delete domain from RedTrack
       if (domainDoc.redtrackDomainId) {
-        console.log(`🔄 Deleting RedTrack domain for ${domain}...`);
-        await redtrackService.deleteRedTrackDomain(domainDoc.redtrackDomainId);
-        console.log(`✅ RedTrack domain deleted for ${domain}`);
+        try {
+          console.log(`🔄 Deleting RedTrack domain for ${domain}...`);
+          await redtrackService.deleteRedTrackDomain(domainDoc.redtrackDomainId);
+          redtrackCleanup = "Domain deleted";
+          console.log(`✅ RedTrack domain deleted for ${domain}`);
+        } catch (rtError) {
+          redtrackCleanup = `Failed: ${rtError.message}`;
+          console.error(
+            `⚠️  RedTrack cleanup failed for ${domain}:`,
+            rtError.message
+          );
+        }
       } else {
         console.log(
           `ℹ️  No RedTrack domain ID found for ${domain}, skipping RedTrack cleanup`
@@ -1459,14 +1501,14 @@ exports.deleteDomain = async (req, res) => {
       // This ensures the domain is removed from database
     }
 
-    // 3. Delete domain from database
+    // 4. Delete domain from database
     const deleted = await Domain.findOneAndDelete({ domain });
     if (!deleted) {
       return res.status(404).json({ error: "Domain not found in database." });
     }
     console.log(`✅ Domain deleted from database: ${domain}`);
 
-    // 4. Delete Nginx config file for this domain
+    // 5. Delete Nginx config file for this domain
     const { execSync } = require("child_process");
     const fs = require("fs");
     const configPath = `/etc/nginx/dynamic/${domain}.conf`;
@@ -1487,7 +1529,7 @@ exports.deleteDomain = async (req, res) => {
       // Continue - this is not critical
     }
 
-    // 5. Test and reload nginx
+    // 6. Test and reload nginx
     try {
       console.log(`🧪 Testing nginx configuration...`);
       execSync("sudo nginx -t", { stdio: "inherit" });
@@ -1510,12 +1552,9 @@ exports.deleteDomain = async (req, res) => {
       domain: domain,
       deletedBy: loggedInUserEmail,
       cleanup: {
-        cloudflare: domainDoc.cloudflareZoneId
-          ? "DNS records deleted"
-          : "No Cloudflare records",
-        redtrack: domainDoc.redtrackDomainId
-          ? "Domain deleted"
-          : "No RedTrack domain",
+        cloudflareCache: cloudflareCachePurge,
+        cloudflareDns: cloudflareDnsCleanup,
+        redtrack: redtrackCleanup,
         nginx: "Config file deleted and nginx reloaded",
       },
     });
