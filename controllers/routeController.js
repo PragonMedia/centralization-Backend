@@ -1424,8 +1424,11 @@ exports.deleteDomain = async (req, res) => {
     );
 
     // --- Cleanup Cloudflare & RedTrack resources ---
+    // Keep Cloudflare A records pointing at origin so deleted hosts hit nginx
+    // default_server (410 + blank favicon) instead of CF Error 1016 with a
+    // browser-cached lander favicon.
     let cloudflareDnsCleanup = domainDoc.cloudflareZoneId
-      ? "pending"
+      ? "DNS kept (not-configured page + favicon clear)"
       : "No Cloudflare zone";
     let cloudflareCachePurge = domainDoc.cloudflareZoneId
       ? "pending"
@@ -1435,12 +1438,31 @@ exports.deleteDomain = async (req, res) => {
       : "No RedTrack domain";
 
     try {
-      // 1. Purge Cloudflare cache for this zone (before DNS teardown)
+      // 1. Purge Cloudflare cache (HTML, assets, favicons at the edge)
       if (domainDoc.cloudflareZoneId) {
         try {
           console.log(`🔄 Purging Cloudflare cache for ${domain}...`);
           await cloudflareService.purgeCache(domainDoc.cloudflareZoneId);
-          cloudflareCachePurge = "Cache purged";
+          // Also purge common favicon URLs explicitly
+          const faviconUrls = [
+            `https://${domain}/favicon.ico`,
+            `http://${domain}/favicon.ico`,
+            `https://www.${domain}/favicon.ico`,
+            `https://${domain}/apple-touch-icon.png`,
+            `https://${domain}/apple-touch-icon-precomposed.png`,
+          ];
+          try {
+            await cloudflareService.purgeCache(
+              domainDoc.cloudflareZoneId,
+              faviconUrls
+            );
+          } catch (faviconPurgeError) {
+            console.warn(
+              `⚠️  Favicon URL purge warning for ${domain}:`,
+              faviconPurgeError.message
+            );
+          }
+          cloudflareCachePurge = "Cache purged (including favicons)";
           console.log(`✅ Cloudflare cache purged for ${domain}`);
         } catch (purgeError) {
           cloudflareCachePurge = `Failed: ${purgeError.message}`;
@@ -1449,30 +1471,13 @@ exports.deleteDomain = async (req, res) => {
             purgeError.message
           );
         }
-
-        // 2. Delete DNS records from Cloudflare
-        try {
-          console.log(`🔄 Deleting DNS records for ${domain}...`);
-          await cloudflareService.deleteDNSRecords(
-            domainDoc.cloudflareZoneId,
-            domain
-          );
-          cloudflareDnsCleanup = "DNS records deleted";
-          console.log(`✅ Cloudflare DNS records deleted for ${domain}`);
-        } catch (dnsError) {
-          cloudflareDnsCleanup = `Failed: ${dnsError.message}`;
-          console.error(
-            `⚠️  Cloudflare DNS cleanup failed for ${domain}:`,
-            dnsError.message
-          );
-        }
       } else {
         console.log(
           `ℹ️  No Cloudflare zone ID found for ${domain}, skipping Cloudflare cleanup`
         );
       }
 
-      // 3. Delete domain from RedTrack
+      // 2. Delete domain from RedTrack
       if (domainDoc.redtrackDomainId) {
         try {
           console.log(`🔄 Deleting RedTrack domain for ${domain}...`);
@@ -1501,14 +1506,14 @@ exports.deleteDomain = async (req, res) => {
       // This ensures the domain is removed from database
     }
 
-    // 4. Delete domain from database
+    // 3. Delete domain from database
     const deleted = await Domain.findOneAndDelete({ domain });
     if (!deleted) {
       return res.status(404).json({ error: "Domain not found in database." });
     }
     console.log(`✅ Domain deleted from database: ${domain}`);
 
-    // 5. Delete Nginx config file for this domain
+    // 4. Delete Nginx config file for this domain
     const { execSync } = require("child_process");
     const fs = require("fs");
     const configPath = `/etc/nginx/dynamic/${domain}.conf`;
@@ -1529,7 +1534,7 @@ exports.deleteDomain = async (req, res) => {
       // Continue - this is not critical
     }
 
-    // 6. Test and reload nginx
+    // 5. Test and reload nginx
     try {
       console.log(`🧪 Testing nginx configuration...`);
       execSync("sudo nginx -t", { stdio: "inherit" });
