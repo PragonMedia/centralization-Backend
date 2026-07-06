@@ -279,6 +279,160 @@ async function deleteRedTrackDomain(domainId) {
 }
 
 /**
+ * Classify a traffic channel (source) by naming prefix.
+ * GG - = Google, FB - = Facebook, everything else = other.
+ * @param {string} title - Channel title from RedTrack
+ * @returns {"google"|"facebook"|"other"}
+ */
+function getTrafficChannelPlatform(title) {
+  const name = String(title || "").trim();
+  if (/^GG\s*-/i.test(name)) return "google";
+  if (/^FB\s*-/i.test(name)) return "facebook";
+  return "other";
+}
+
+/**
+ * Fetch all traffic sources (RedTrack UI: "traffic channels") with pagination.
+ * @param {object} [options]
+ * @param {number} [options.per=100] - Page size
+ * @returns {Promise<object[]>}
+ */
+async function getAllTrafficSources({ per = 100 } = {}) {
+  const sources = [];
+  let page = 1;
+
+  while (true) {
+    const res = await client.get("/sources", { params: { page, per } });
+    const batch = Array.isArray(res.data)
+      ? res.data
+      : res.data?.items || [];
+
+    if (!batch.length) break;
+
+    sources.push(...batch);
+    if (batch.length < per) break;
+    page += 1;
+  }
+
+  return sources;
+}
+
+/**
+ * Group traffic sources by platform using GG / FB title prefixes.
+ * @param {object[]} sources
+ * @returns {{ google: object[], facebook: object[], other: object[], counts: object }}
+ */
+function groupTrafficSourcesByPlatform(sources) {
+  const grouped = { google: [], facebook: [], other: [] };
+
+  for (const source of sources) {
+    const platform = getTrafficChannelPlatform(source.title);
+    grouped[platform].push(source);
+  }
+
+  return {
+    ...grouped,
+    counts: {
+      total: sources.length,
+      google: grouped.google.length,
+      facebook: grouped.facebook.length,
+      other: grouped.other.length,
+    },
+  };
+}
+
+/**
+ * Fetch all traffic channels and group by GG (Google) vs FB (Facebook).
+ * @returns {Promise<{ google: object[], facebook: object[], other: object[], counts: object }>}
+ */
+async function getGroupedTrafficChannels() {
+  const sources = await getAllTrafficSources();
+  return groupTrafficSourcesByPlatform(sources);
+}
+
+/**
+ * @param {object} sub
+ * @param {object} templateSub
+ * @returns {object}
+ */
+function normalizeSubAgainstTemplate(sub, templateSub) {
+  const normalized = {};
+  for (const key of ["value", "hint", "role", "alias"]) {
+    if (key in templateSub) {
+      normalized[key] = sub?.[key] ?? "";
+    }
+  }
+  return normalized;
+}
+
+/**
+ * Deep-clone the template subs for writing to RedTrack.
+ * @param {object[]} template
+ * @returns {object[]}
+ */
+function cloneSubsTemplate(template) {
+  return template.map((entry) => ({ ...entry }));
+}
+
+/**
+ * @param {object} sub
+ * @param {object} templateSub
+ * @returns {boolean}
+ */
+function subMatchesTemplate(sub, templateSub) {
+  for (const key of ["value", "hint", "role", "alias"]) {
+    if (key in templateSub) {
+      if ((sub?.[key] ?? "") !== templateSub[key]) {
+        return false;
+      }
+    } else if (sub?.[key] !== undefined && sub[key] !== "") {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * True when current subs match the template exactly (index, fields, values).
+ * @param {object[]|undefined} current
+ * @param {object[]} template
+ * @returns {boolean}
+ */
+function subsMatchTemplate(current, template) {
+  if (!Array.isArray(current) || current.length !== template.length) {
+    return false;
+  }
+  for (let i = 0; i < template.length; i++) {
+    if (!subMatchesTemplate(current[i], template[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * @param {string} sourceId
+ * @returns {Promise<object>}
+ */
+async function getTrafficSourceById(sourceId) {
+  const res = await client.get(`/sources/${sourceId}`);
+  return res.data;
+}
+
+/**
+ * @param {string} sourceId
+ * @param {object} sourceData - Full source payload (GET + edits)
+ * @returns {Promise<object>}
+ */
+async function updateTrafficSource(sourceId, sourceData) {
+  const payload = { ...sourceData, id: sourceData.id || sourceId };
+  delete payload.stat;
+
+  const res = await client.put(`/sources/${sourceId}`, payload);
+  return res.data;
+}
+
+/**
  * Quick test function to verify API key works
  * @returns {Promise<object>} Test result
  */
@@ -317,5 +471,15 @@ module.exports = {
   checkDomainStatus,
   getRedTrackDedicatedDomain,
   deleteRedTrackDomain,
+  getTrafficChannelPlatform,
+  getAllTrafficSources,
+  groupTrafficSourcesByPlatform,
+  getGroupedTrafficChannels,
+  normalizeSubAgainstTemplate,
+  subMatchesTemplate,
+  cloneSubsTemplate,
+  subsMatchTemplate,
+  getTrafficSourceById,
+  updateTrafficSource,
   testAPIKey,
 };

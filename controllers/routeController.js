@@ -1433,12 +1433,43 @@ exports.deleteDomain = async (req, res) => {
     let cloudflareCachePurge = domainDoc.cloudflareZoneId
       ? "pending"
       : "No Cloudflare zone";
+    let cloudflareAutoRenew = "pending";
     let redtrackCleanup = domainDoc.redtrackDomainId
       ? "pending"
       : "No RedTrack domain";
 
     try {
-      // 1. Purge Cloudflare cache (HTML, assets, favicons at the edge)
+      // 1. Disable Cloudflare Registrar auto-renew (best-effort)
+      try {
+        console.log(`🔄 Disabling Cloudflare auto-renew for ${domain}...`);
+        const autoRenewResult =
+          await cloudflareService.disableRegistrarAutoRenew(domain);
+        switch (autoRenewResult.status) {
+          case "disabled":
+          case "disabled_async":
+            cloudflareAutoRenew = "Auto-renew disabled";
+            break;
+          case "already_disabled":
+            cloudflareAutoRenew = "Auto-renew already off";
+            break;
+          case "not_cloudflare_registration":
+            cloudflareAutoRenew = "Not a Cloudflare registration";
+            break;
+          case "skipped_no_account_id":
+            cloudflareAutoRenew = "Skipped (no CLOUDFLARE_ACCOUNT_ID)";
+            break;
+          default:
+            cloudflareAutoRenew = autoRenewResult.status;
+        }
+      } catch (autoRenewError) {
+        cloudflareAutoRenew = `Failed: ${autoRenewError.message}`;
+        console.error(
+          `⚠️  Cloudflare auto-renew disable failed for ${domain}:`,
+          autoRenewError.message
+        );
+      }
+
+      // 2. Purge Cloudflare cache (HTML, assets, favicons at the edge)
       if (domainDoc.cloudflareZoneId) {
         try {
           console.log(`🔄 Purging Cloudflare cache for ${domain}...`);
@@ -1477,7 +1508,7 @@ exports.deleteDomain = async (req, res) => {
         );
       }
 
-      // 2. Delete domain from RedTrack
+      // 3. Delete domain from RedTrack
       if (domainDoc.redtrackDomainId) {
         try {
           console.log(`🔄 Deleting RedTrack domain for ${domain}...`);
@@ -1559,6 +1590,7 @@ exports.deleteDomain = async (req, res) => {
       cleanup: {
         cloudflareCache: cloudflareCachePurge,
         cloudflareDns: cloudflareDnsCleanup,
+        cloudflareAutoRenew,
         redtrack: redtrackCleanup,
         nginx: "Config file deleted and nginx reloaded",
       },

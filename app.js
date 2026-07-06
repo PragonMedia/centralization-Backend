@@ -21,6 +21,7 @@ const rokuLogsRouter = require("./routes/rokuLogsRoutes");
 const rokuAdsRouter = require("./routes/rokuAdsRoutes");
 const rokuAdSpendRouter = require("./routes/rokuAdSpendRoutes");
 const dynamicRingTreeTargetRouter = require("./routes/dynamicRingTreeTargetRoutes");
+const redtrackRouter = require("./routes/redtrackRoutes");
 const webhookRouter = require("./routes/webhookRoutes");
 const { ringbaBodyParser } = require("./middleware/ringbaBodyParser");
 
@@ -213,6 +214,7 @@ app.use("/api/v1", rokuLogsRouter);
 app.use("/api/v1", rokuAdsRouter);
 app.use("/api/v1/roku-ad-spend", rokuAdSpendRouter);
 app.use("/api/v1/ring-tree-target", dynamicRingTreeTargetRouter);
+app.use("/api/v1/redtrack", redtrackRouter);
 app.use("/api/v1", routeRouter); // ✅ example endpoint: POST /routes
 app.use("/webhooks", webhookRouter);
 
