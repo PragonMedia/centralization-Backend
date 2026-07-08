@@ -15,6 +15,9 @@ const {
 const {
   startDynamicRingTreeTargetScheduler,
 } = require("./services/dynamicRingTreeTargetScheduler");
+const {
+  startArchivedDomainPurgeScheduler,
+} = require("./services/archivedDomainPurgeScheduler");
 
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
@@ -35,6 +38,7 @@ mongoose
     startStatePerformanceScheduler();
     startRokuAdSpendScheduler();
     startDynamicRingTreeTargetScheduler();
+    startArchivedDomainPurgeScheduler();
   })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 

@@ -81,6 +81,22 @@ const domainSchema = new mongoose.Schema(
       type: String,
       required: false,
     },
+    previousRedtrackDomainId: {
+      type: String,
+      required: false,
+    },
+
+    // Lifecycle: active domains are live; archived domains keep all data but are offline
+    status: {
+      type: String,
+      enum: ["active", "archived"],
+      default: "active",
+    },
+    archivedAt: { type: Date, required: false },
+    archivedBy: { type: String, required: false },
+    purgeAt: { type: Date, required: false },
+    restoredAt: { type: Date, required: false },
+    restoredBy: { type: String, required: false },
   },
   {
     timestamps: true,

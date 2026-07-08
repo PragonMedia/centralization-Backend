@@ -639,6 +639,86 @@ async function disableRegistrarAutoRenew(domain) {
 }
 
 /**
+ * Enable auto-renew for a domain registered with Cloudflare Registrar.
+ * No-op if the domain is not CF-registered or auto-renew is already on.
+ * @param {string} domain - Domain name (FQDN)
+ * @returns {Promise<{status: string, autoRenew?: boolean}>}
+ */
+async function enableRegistrarAutoRenew(domain) {
+  if (
+    !CLOUDFLARE_CONFIG.API_TOKEN ||
+    CLOUDFLARE_CONFIG.API_TOKEN.trim() === ""
+  ) {
+    throw new Error(
+      "Cloudflare API token is not set. Please check your .env file (CLOUDFLARE_API_TOKEN)"
+    );
+  }
+
+  if (!CLOUDFLARE_CONFIG.ACCOUNT_ID) {
+    return { status: "skipped_no_account_id" };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${CLOUDFLARE_CONFIG.API_TOKEN}`,
+    "Content-Type": "application/json",
+  };
+
+  const registrationUrl = `${CLOUDFLARE_CONFIG.BASE_URL}/accounts/${CLOUDFLARE_CONFIG.ACCOUNT_ID}/registrar/registrations/${encodeURIComponent(domain)}`;
+
+  try {
+    const existing = await axios.get(registrationUrl, { headers });
+    const registration = existing.data?.result;
+
+    if (!registration) {
+      return { status: "not_cloudflare_registration" };
+    }
+
+    if (registration.auto_renew === true) {
+      console.log(`ℹ️  Auto-renew already enabled for ${domain}`);
+      return { status: "already_enabled", autoRenew: true };
+    }
+
+    const response = await axios.patch(
+      registrationUrl,
+      { auto_renew: true },
+      { headers }
+    );
+
+    if (!response.data?.success) {
+      const msg =
+        response.data?.errors?.map((e) => e.message).join(", ") ||
+        "Unknown registrar API error";
+      throw new Error(msg);
+    }
+
+    const autoRenew = response.data?.result?.auto_renew;
+    console.log(
+      `✅ Cloudflare auto-renew enabled for ${domain}${response.status === 202 ? " (async)" : ""}`
+    );
+    return {
+      status: response.status === 202 ? "enabled_async" : "enabled",
+      autoRenew: autoRenew === undefined ? true : autoRenew,
+    };
+  } catch (error) {
+    if (error.response?.status === 404) {
+      console.log(
+        `ℹ️  ${domain} is not a Cloudflare Registrar registration, skipping auto-renew`
+      );
+      return { status: "not_cloudflare_registration" };
+    }
+
+    if (error.response) {
+      const cfError = error.response.data;
+      const errorMessages =
+        cfError?.errors?.map((e) => e.message).join(", ") || error.message;
+      throw new Error(errorMessages);
+    }
+
+    throw error;
+  }
+}
+
+/**
  * Purge Cloudflare cache for a domain
  * @param {string} zoneId - Cloudflare zone ID
  * @param {string[]} urls - Optional array of specific URLs to purge. If empty, purges everything
@@ -698,4 +778,5 @@ module.exports = {
   deleteDNSRecords,
   purgeCache,
   disableRegistrarAutoRenew,
+  enableRegistrarAutoRenew,
 };

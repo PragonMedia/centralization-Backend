@@ -3,8 +3,8 @@
  * Order and field values must match exactly — do not reorder.
  */
 const FB_TRAFFIC_CHANNEL_SUBS = [
-  { value: "{{ad.id}}", alias: "ad_id", hint: "ad_id" },
-  { value: "{{adset.id}}", alias: "ad_group_id", hint: "adset_id" },
+  { value: "{{ad.id}}", alias: "ad_id", hint: "ad_id", role: "aid" },
+  { value: "{{adset.id}}", alias: "ad_group_id", hint: "adset_id", role: "gid" },
   { value: "{{campaign.id}}", alias: "campaign_id", hint: "campaign_id" },
   { value: "{{ad.name}}", alias: "ad_name", hint: "ad_name" },
   { value: "{{adset.name}}", alias: "ad_group_name", hint: "adset_name" },

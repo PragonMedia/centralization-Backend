@@ -14,6 +14,11 @@ const CLOUDFLARE_CONFIG = require("../config/cloudflare");
 const axios = require("axios");
 const cacheService = require("../services/cacheService");
 const phpFpmMonitor = require("../services/phpFpmMonitor");
+const {
+  computePurgeAt,
+  formatArchivedDomainResponse,
+  getTrashMetadata,
+} = require("../services/trashBinService");
 
 // Helper function to extract user from JWT token
 const getUserFromToken = async (req) => {
@@ -47,6 +52,17 @@ const getUserFromToken = async (req) => {
   }
 };
 
+const ACTIVE_DOMAIN_FILTER = { status: { $ne: "archived" } };
+const ARCHIVED_DOMAIN_FILTER = { status: "archived" };
+
+function isDomainArchived(domainDoc) {
+  return domainDoc?.status === "archived";
+}
+
+function mergeActiveFilter(query = {}) {
+  return { ...query, ...ACTIVE_DOMAIN_FILTER };
+}
+
 // GET ALL DOMAINS with sorting and filtering
 exports.getAllDomains = async (req, res) => {
   try {
@@ -59,16 +75,22 @@ exports.getAllDomains = async (req, res) => {
     } = req.query;
 
     // Build query object
-    let query = {};
+    let query = mergeActiveFilter();
 
     // Search filter
     if (search) {
-      query.$or = [
-        { domain: { $regex: search, $options: "i" } },
-        { "routes.route": { $regex: search, $options: "i" } },
-        { "routes.organization": { $regex: search, $options: "i" } },
-        { "routes.createdBy": { $regex: search, $options: "i" } },
+      query.$and = [
+        ACTIVE_DOMAIN_FILTER,
+        {
+          $or: [
+            { domain: { $regex: search, $options: "i" } },
+            { "routes.route": { $regex: search, $options: "i" } },
+            { "routes.organization": { $regex: search, $options: "i" } },
+            { "routes.createdBy": { $regex: search, $options: "i" } },
+          ],
+        },
       ];
+      delete query.status;
     }
 
     // Build sort object
@@ -128,7 +150,7 @@ exports.getAllDomains = async (req, res) => {
 // GET DOMAIN NAMES ONLY (without route details)
 exports.getDomainNames = async (req, res) => {
   try {
-    const domains = await Domain.find({}, { domain: 1, _id: 0 });
+    const domains = await Domain.find(ACTIVE_DOMAIN_FILTER, { domain: 1, _id: 0 });
 
     const domainNames = domains.map((doc) => doc.domain);
 
@@ -217,6 +239,16 @@ exports.createDomain = async (req, res) => {
     console.log(`🔍 STEP 2 — Checking if domain exists in database`);
     const existingDomain = await Domain.findOne({ domain: sanitizedDomain });
     if (existingDomain) {
+      if (isDomainArchived(existingDomain)) {
+        console.error(`❌ Domain is archived: ${sanitizedDomain}`);
+        return res.status(400).json({
+          error: "Domain is archived",
+          details: `Domain ${sanitizedDomain} is archived. Restore it instead of creating a new one.`,
+          domain: sanitizedDomain,
+          status: "archived",
+          canRestore: true,
+        });
+      }
       console.error(`❌ Domain already exists: ${sanitizedDomain}`);
       return res.status(400).json({
         error: "Domain already exists",
@@ -704,6 +736,15 @@ exports.createRoute = async (req, res) => {
       });
     }
 
+    if (isDomainArchived(domainDoc)) {
+      return res.status(400).json({
+        error: "Domain is archived.",
+        details: "Restore this domain before adding routes.",
+        domain: domainDoc.domain,
+        status: "archived",
+      });
+    }
+
     // Role-based access control
     if (loggedInUserRole === "mediaBuyer") {
       // MediaBuyer can only create routes on domains assigned to them
@@ -884,6 +925,15 @@ exports.updateDomainName = async (req, res) => {
     const domainDoc = await Domain.findOne({ domain: oldDomain });
     if (!domainDoc) {
       return res.status(404).json({ error: "Domain not found." });
+    }
+
+    if (isDomainArchived(domainDoc)) {
+      return res.status(400).json({
+        error: "Domain is archived.",
+        details: "Restore this domain before updating it.",
+        domain: domainDoc.domain,
+        status: "archived",
+      });
     }
 
     console.log(`📋 Found domain document:`, domainDoc.domain);
@@ -1099,6 +1149,15 @@ exports.updateRouteData = async (req, res) => {
       return res.status(404).json({ error: "Domain not found." });
     }
 
+    if (isDomainArchived(domainDoc)) {
+      return res.status(400).json({
+        error: "Domain is archived.",
+        details: "Restore this domain before updating routes.",
+        domain: domainDoc.domain,
+        status: "archived",
+      });
+    }
+
     // Role-based access control
     if (loggedInUserRole === "mediaBuyer") {
       // MediaBuyer can only update routes on domains assigned to them
@@ -1298,12 +1357,20 @@ exports.getDomainRouteDetails = async (req, res) => {
         domain: 1,
         organization: 1,
         platform: 1,
+        status: 1,
         redtrackTrackingDomain: 1,
         routes: 1, // Fetch all routes, then filter in JavaScript
       }
     );
 
     if (!domainDoc) {
+      return res.status(404).json({
+        error: "Domain not found.",
+        domain: sanitizedDomain,
+      });
+    }
+
+    if (isDomainArchived(domainDoc)) {
       return res.status(404).json({
         error: "Domain not found.",
         domain: sanitizedDomain,
@@ -1401,6 +1468,15 @@ exports.deleteDomain = async (req, res) => {
       return res.status(404).json({ error: "Domain not found." });
     }
 
+    if (isDomainArchived(domainDoc)) {
+      return res.status(400).json({
+        error: "Domain is already archived.",
+        details: `Domain ${domain} has already been archived.`,
+        domain,
+        status: "archived",
+      });
+    }
+
     // Role-based access control
     if (loggedInUserRole === "mediaBuyer") {
       // MediaBuyer can only delete domains assigned to them
@@ -1420,7 +1496,7 @@ exports.deleteDomain = async (req, res) => {
     }
 
     console.log(
-      `🗑️  Deleting domain: ${domain} (requested by: ${loggedInUserEmail}, role: ${loggedInUserRole})`
+      `🗑️  Archiving domain: ${domain} (requested by: ${loggedInUserEmail}, role: ${loggedInUserRole})`
     );
 
     // --- Cleanup Cloudflare & RedTrack resources ---
@@ -1537,12 +1613,19 @@ exports.deleteDomain = async (req, res) => {
       // This ensures the domain is removed from database
     }
 
-    // 3. Delete domain from database
-    const deleted = await Domain.findOneAndDelete({ domain });
-    if (!deleted) {
-      return res.status(404).json({ error: "Domain not found in database." });
+    // 3. Archive domain in database (keep all routes and metadata)
+    if (domainDoc.redtrackDomainId) {
+      domainDoc.previousRedtrackDomainId = domainDoc.redtrackDomainId;
     }
-    console.log(`✅ Domain deleted from database: ${domain}`);
+    domainDoc.redtrackDomainId = null;
+    domainDoc.status = "archived";
+    domainDoc.archivedAt = new Date();
+    domainDoc.archivedBy = loggedInUserEmail;
+    domainDoc.purgeAt = computePurgeAt(domainDoc.archivedAt);
+    domainDoc.restoredAt = undefined;
+    domainDoc.restoredBy = undefined;
+    await domainDoc.save();
+    console.log(`✅ Domain archived in database: ${domain} (data retained)`);
 
     // 4. Delete Nginx config file for this domain
     const { execSync } = require("child_process");
@@ -1584,9 +1667,13 @@ exports.deleteDomain = async (req, res) => {
     }
 
     res.status(200).json({
-      message: "Domain and its routes deleted successfully.",
+      message:
+        "Domain moved to trash. Restore within the retention window or it will be permanently deleted.",
       domain: domain,
-      deletedBy: loggedInUserEmail,
+      status: "archived",
+      archivedBy: loggedInUserEmail,
+      archivedAt: domainDoc.archivedAt,
+      trash: getTrashMetadata(domainDoc),
       cleanup: {
         cloudflareCache: cloudflareCachePurge,
         cloudflareDns: cloudflareDnsCleanup,
@@ -1597,14 +1684,296 @@ exports.deleteDomain = async (req, res) => {
     });
   } catch (err) {
     console.error("=".repeat(80));
-    console.error("❌ DOMAIN DELETION ERROR");
+    console.error("❌ DOMAIN ARCHIVE ERROR");
     console.error("Domain:", req.params.domain);
     console.error("Error name:", err.name);
     console.error("Error message:", err.message);
     console.error("Error stack:", err.stack);
     console.error("=".repeat(80));
     res.status(500).json({
-      error: "Server error while deleting domain.",
+      error: "Server error while archiving domain.",
+      details: err.message,
+    });
+  }
+};
+
+// GET ARCHIVED DOMAINS
+exports.getArchivedDomains = async (req, res) => {
+  try {
+    const loggedInUser = await getUserFromToken(req);
+    if (!loggedInUser) {
+      return res.status(401).json({
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const loggedInUserEmail = loggedInUser.email;
+    const loggedInUserRole = loggedInUser.role;
+
+    const {
+      sortBy = "archivedAt",
+      sortOrder = "desc",
+      limit,
+      page = 1,
+      search,
+    } = req.query;
+
+    let query = { ...ARCHIVED_DOMAIN_FILTER };
+
+    if (loggedInUserRole === "mediaBuyer") {
+      query.assignedTo = loggedInUserEmail;
+    } else if (!["tech", "ceo", "admin"].includes(loggedInUserRole)) {
+      return res.status(403).json({
+        error: "You don't have permission to view archived domains.",
+      });
+    }
+
+    if (search) {
+      query.$and = [
+        { status: "archived" },
+        ...(loggedInUserRole === "mediaBuyer"
+          ? [{ assignedTo: loggedInUserEmail }]
+          : []),
+        {
+          $or: [
+            { domain: { $regex: search, $options: "i" } },
+            { "routes.route": { $regex: search, $options: "i" } },
+            { assignedTo: { $regex: search, $options: "i" } },
+          ],
+        },
+      ];
+      delete query.status;
+      delete query.assignedTo;
+    }
+
+    const sortOptions = {};
+    const validSortFields = [
+      "archivedAt",
+      "createdAt",
+      "updatedAt",
+      "domain",
+      "assignedTo",
+    ];
+    const validSortOrders = ["asc", "desc"];
+
+    if (
+      validSortFields.includes(sortBy) &&
+      validSortOrders.includes(sortOrder)
+    ) {
+      sortOptions[sortBy] = sortOrder === "desc" ? -1 : 1;
+    } else {
+      sortOptions.archivedAt = -1;
+    }
+
+    const findOptions = { sort: sortOptions };
+
+    if (limit) {
+      const limitNum = parseInt(limit, 10);
+      const pageNum = parseInt(page, 10);
+      findOptions.limit = limitNum;
+      findOptions.skip = (pageNum - 1) * limitNum;
+    }
+
+    const domains = await Domain.find(query, null, findOptions);
+    const totalCount = await Domain.countDocuments(query);
+
+    res.status(200).json({
+      domains: domains.map(formatArchivedDomainResponse),
+      retentionDays: getTrashMetadata({}).retentionDays,
+      pagination: {
+        total: totalCount,
+        page: parseInt(page, 10),
+        limit: limit ? parseInt(limit, 10) : null,
+        pages: limit ? Math.ceil(totalCount / parseInt(limit, 10)) : 1,
+      },
+    });
+  } catch (err) {
+    console.error("Error fetching archived domains:", err);
+    res
+      .status(500)
+      .json({ error: "Server error while retrieving archived domains." });
+  }
+};
+
+// RESTORE AN ARCHIVED DOMAIN
+exports.restoreDomain = async (req, res) => {
+  const { execSync } = require("child_process");
+  const fs = require("fs");
+
+  try {
+    const { domain } = req.params;
+
+    const loggedInUser = await getUserFromToken(req);
+    if (!loggedInUser) {
+      return res.status(401).json({
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const loggedInUserEmail = loggedInUser.email;
+    const loggedInUserRole = loggedInUser.role;
+
+    const domainDoc = await Domain.findOne({ domain });
+    if (!domainDoc) {
+      return res.status(404).json({ error: "Domain not found." });
+    }
+
+    if (!isDomainArchived(domainDoc)) {
+      return res.status(400).json({
+        error: "Domain is not archived.",
+        details: `Domain ${domain} is active and does not need restoration.`,
+        domain,
+        status: domainDoc.status || "active",
+      });
+    }
+
+    if (loggedInUserRole === "mediaBuyer") {
+      if (domainDoc.assignedTo !== loggedInUserEmail) {
+        return res.status(403).json({
+          error: "You don't have access to restore this domain.",
+        });
+      }
+    } else if (!["tech", "ceo", "admin"].includes(loggedInUserRole)) {
+      return res.status(403).json({
+        error: "You don't have permission to restore domains.",
+      });
+    }
+
+    console.log(
+      `♻️  Restoring domain: ${domain} (requested by: ${loggedInUserEmail}, role: ${loggedInUserRole})`
+    );
+
+    let cloudflareAutoRenew = "pending";
+    let redtrackRestore = "pending";
+    let nginxRestore = "pending";
+
+    try {
+      console.log(`🔄 Enabling Cloudflare auto-renew for ${domain}...`);
+      const autoRenewResult =
+        await cloudflareService.enableRegistrarAutoRenew(domain);
+      switch (autoRenewResult.status) {
+        case "enabled":
+        case "enabled_async":
+          cloudflareAutoRenew = "Auto-renew enabled";
+          break;
+        case "already_enabled":
+          cloudflareAutoRenew = "Auto-renew already on";
+          break;
+        case "not_cloudflare_registration":
+          cloudflareAutoRenew = "Not a Cloudflare registration";
+          break;
+        case "skipped_no_account_id":
+          cloudflareAutoRenew = "Skipped (no CLOUDFLARE_ACCOUNT_ID)";
+          break;
+        default:
+          cloudflareAutoRenew = autoRenewResult.status;
+      }
+    } catch (autoRenewError) {
+      cloudflareAutoRenew = `Failed: ${autoRenewError.message}`;
+      console.error(
+        `⚠️  Cloudflare auto-renew enable failed for ${domain}:`,
+        autoRenewError.message
+      );
+    }
+
+    const redtrackDedicatedDomain =
+      redtrackService.getRedTrackDedicatedDomain();
+
+    if (redtrackDedicatedDomain) {
+      try {
+        console.log(`🔄 Ensuring trk CNAME is DNS-only for ${domain}...`);
+        const disableResult = await disableProxyForTrkCNAME(domain);
+        if (!disableResult.success) {
+          console.warn(
+            `⚠️  Could not ensure trk CNAME is DNS-only: ${disableResult.error}`
+          );
+        }
+
+        console.log(`⏳ Waiting 5 seconds before RedTrack registration...`);
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+
+        console.log(`🔄 Re-registering ${domain} with RedTrack...`);
+        const redtrackResult = await redtrackService.addRedTrackDomain(domain);
+
+        if (redtrackResult.status === "skipped") {
+          redtrackRestore = `Skipped: ${redtrackResult.reason || "unknown reason"}`;
+          console.warn(`⚠️  RedTrack restore skipped: ${redtrackRestore}`);
+        } else {
+          domainDoc.redtrackDomainId = redtrackResult.domainId;
+          domainDoc.redtrackTrackingDomain = redtrackResult.trackingDomain;
+          redtrackRestore = "RedTrack domain re-registered";
+
+          const trkProxyResult = await enableProxyForTrkCNAME(domain);
+          if (!trkProxyResult.success) {
+            console.warn(
+              `⚠️  Could not enable proxy for trk CNAME: ${trkProxyResult.error}`
+            );
+          }
+        }
+      } catch (rtError) {
+        redtrackRestore = `Failed: ${rtError.message}`;
+        console.error(`⚠️  RedTrack restore failed for ${domain}:`, rtError.message);
+      }
+    } else {
+      redtrackRestore = "RedTrack not configured";
+    }
+
+    domainDoc.status = "active";
+    domainDoc.restoredAt = new Date();
+    domainDoc.restoredBy = loggedInUserEmail;
+    domainDoc.archivedAt = undefined;
+    domainDoc.archivedBy = undefined;
+    domainDoc.purgeAt = undefined;
+    await domainDoc.save();
+
+    try {
+      console.log(`🔄 Regenerating nginx config for ${domain}...`);
+      const nginxResult = await generateNginxConfig(domainDoc);
+      if (nginxResult?.warning) {
+        nginxRestore = `Warning: ${nginxResult.warning}`;
+      } else {
+        nginxRestore = "Nginx config regenerated";
+      }
+
+      const configPath = `/etc/nginx/dynamic/${domain}.conf`;
+      if (!fs.existsSync(configPath)) {
+        nginxRestore = `Warning: config file missing at ${configPath}`;
+      }
+
+      execSync("sudo nginx -t", { stdio: "inherit" });
+      execSync("sudo systemctl reload nginx", { stdio: "inherit" });
+      nginxRestore = "Nginx config regenerated and reloaded";
+    } catch (nginxError) {
+      nginxRestore = `Failed: ${nginxError.message}`;
+      console.error(`⚠️  Nginx restore failed for ${domain}:`, nginxError.message);
+    }
+
+    res.status(200).json({
+      message: "Domain restored successfully.",
+      domain,
+      status: "active",
+      restoredBy: loggedInUserEmail,
+      restoredAt: domainDoc.restoredAt,
+      restore: {
+        cloudflareAutoRenew,
+        redtrack: redtrackRestore,
+        nginx: nginxRestore,
+      },
+      domainDoc: {
+        redtrackDomainId: domainDoc.redtrackDomainId,
+        redtrackTrackingDomain: domainDoc.redtrackTrackingDomain,
+        routeCount: domainDoc.routes?.length || 0,
+      },
+    });
+  } catch (err) {
+    console.error("=".repeat(80));
+    console.error("❌ DOMAIN RESTORE ERROR");
+    console.error("Domain:", req.params.domain);
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    console.error("=".repeat(80));
+    res.status(500).json({
+      error: "Server error while restoring domain.",
       details: err.message,
     });
   }
@@ -1630,6 +1999,15 @@ exports.deleteSubRoute = async (req, res) => {
 
     if (!domainDoc) {
       return res.status(404).json({ error: "Domain not found." });
+    }
+
+    if (isDomainArchived(domainDoc)) {
+      return res.status(400).json({
+        error: "Domain is archived.",
+        details: "Restore this domain before deleting routes.",
+        domain: domainDoc.domain,
+        status: "archived",
+      });
     }
 
     // Role-based access control
@@ -1706,6 +2084,7 @@ exports.getRecentDomains = async (req, res) => {
     daysAgo.setDate(daysAgo.getDate() - parseInt(days));
 
     const recentDomains = await Domain.find({
+      ...ACTIVE_DOMAIN_FILTER,
       createdAt: { $gte: daysAgo },
     }).sort({ createdAt: -1 });
 
@@ -1764,6 +2143,7 @@ exports.getDomainsByDateRange = async (req, res) => {
     }
 
     const domains = await Domain.find({
+      ...ACTIVE_DOMAIN_FILTER,
       createdAt: { $gte: start, $lte: end },
     }).sort(sortOptions);
 
@@ -1783,23 +2163,26 @@ exports.getDomainsByDateRange = async (req, res) => {
 // Get domain statistics
 exports.getDomainStats = async (req, res) => {
   try {
-    const totalDomains = await Domain.countDocuments();
+    const totalDomains = await Domain.countDocuments(ACTIVE_DOMAIN_FILTER);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const domainsToday = await Domain.countDocuments({
+      ...ACTIVE_DOMAIN_FILTER,
       createdAt: { $gte: today },
     });
 
     const thisWeek = new Date();
     thisWeek.setDate(thisWeek.getDate() - 7);
     const domainsThisWeek = await Domain.countDocuments({
+      ...ACTIVE_DOMAIN_FILTER,
       createdAt: { $gte: thisWeek },
     });
 
     const thisMonth = new Date();
     thisMonth.setMonth(thisMonth.getMonth() - 1);
     const domainsThisMonth = await Domain.countDocuments({
+      ...ACTIVE_DOMAIN_FILTER,
       createdAt: { $gte: thisMonth },
     });
 
@@ -1818,7 +2201,7 @@ exports.getDomainStats = async (req, res) => {
 };
 
 exports.getRoutesFromDatabase = async () => {
-  return await Domain.find({});
+  return await Domain.find(ACTIVE_DOMAIN_FILTER);
 };
 
 // Get routes by creator
@@ -1854,6 +2237,7 @@ exports.getRoutesByCreator = async (req, res) => {
 
     // Find domains that have routes created by the specified user
     const domains = await Domain.find({
+      ...ACTIVE_DOMAIN_FILTER,
       "routes.createdBy": createdBy,
     }).sort(sortOptions);
 
@@ -1892,6 +2276,7 @@ exports.getCreatorStats = async (req, res) => {
 
     // Get total routes by creator
     const totalRoutes = await Domain.aggregate([
+      { $match: ACTIVE_DOMAIN_FILTER },
       { $unwind: "$routes" },
       { $match: { "routes.createdBy": createdBy } },
       { $count: "count" },
@@ -1901,6 +2286,7 @@ exports.getCreatorStats = async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const routesToday = await Domain.aggregate([
+      { $match: ACTIVE_DOMAIN_FILTER },
       { $unwind: "$routes" },
       {
         $match: {
@@ -1915,6 +2301,7 @@ exports.getCreatorStats = async (req, res) => {
     const thisWeek = new Date();
     thisWeek.setDate(thisWeek.getDate() - 7);
     const routesThisWeek = await Domain.aggregate([
+      { $match: ACTIVE_DOMAIN_FILTER },
       { $unwind: "$routes" },
       {
         $match: {

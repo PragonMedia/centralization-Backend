@@ -15,9 +15,12 @@ router.post("/route", routeController.createRoute);
 
 // Delete operations
 router.delete("/domain/:domain", routeController.deleteDomain);
+router.post("/domain/:domain/restore", routeController.restoreDomain);
 router.delete("/domain/:domain/route/:route", routeController.deleteSubRoute);
 
 // Advanced filtering and analytics
+router.get("/archived", routeController.getArchivedDomains);
+router.get("/trash", routeController.getArchivedDomains);
 router.get("/recent", routeController.getRecentDomains);
 router.get("/date-range", routeController.getDomainsByDateRange);
 router.get("/stats", routeController.getDomainStats);
