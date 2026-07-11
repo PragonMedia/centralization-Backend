@@ -11,6 +11,10 @@ const {
 } = require("../services/cloudflareProxyEnable");
 const templateService = require("../services/templateService");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
+const {
+  DOMAIN_VERTICALS,
+  isValidDomainVertical,
+} = require("../config/domainVerticals");
 const axios = require("axios");
 const cacheService = require("../services/cacheService");
 const phpFpmMonitor = require("../services/phpFpmMonitor");
@@ -193,17 +197,19 @@ exports.createDomain = async (req, res) => {
       platform,
       rtkID,
       certificationTags,
+      vertical,
     } = requestData;
 
     console.log("🔍 STEP 1 — Validating request body");
 
     // Validate required fields
-    if (!domain || !assignedTo || !id || !platform) {
+    if (!domain || !assignedTo || !id || !platform || !vertical) {
       const missing = [];
       if (!domain) missing.push("domain");
       if (!assignedTo) missing.push("assignedTo");
       if (!id) missing.push("id");
       if (!platform) missing.push("platform");
+      if (!vertical) missing.push("vertical");
 
       console.error("❌ Validation failed: Missing required fields:", missing);
       return res.status(400).json({
@@ -280,6 +286,15 @@ exports.createDomain = async (req, res) => {
         error: "Invalid platform",
         details: "Platform must be a non-empty string",
         provided: platform,
+      });
+    }
+
+    if (!isValidDomainVertical(vertical)) {
+      console.error(`❌ Validation failed: Invalid vertical: ${vertical}`);
+      return res.status(400).json({
+        error: "Invalid vertical",
+        details: `Must be one of: ${DOMAIN_VERTICALS.join(", ")}`,
+        provided: vertical,
       });
     }
 
@@ -402,6 +417,7 @@ exports.createDomain = async (req, res) => {
         organization: organization || "Paragon",
         id,
         platform,
+        vertical,
         rtkID: rtkID || null,
         certificationTags: certificationTags || [],
         routes: [],
@@ -610,6 +626,7 @@ exports.createDomain = async (req, res) => {
         organization: newDomain.organization,
         id: newDomain.id,
         platform: newDomain.platform,
+        vertical: newDomain.vertical,
         rtkID: newDomain.rtkID,
         certificationTags: newDomain.certificationTags,
         routes: newDomain.routes,
@@ -912,6 +929,7 @@ exports.updateDomainName = async (req, res) => {
       newRtkID,
       newCertificationTags,
       newAssignedTo,
+      newVertical,
     } = req.body;
 
     console.log(`🔍 Attempting to update domain: ${oldDomain}`);
@@ -943,6 +961,7 @@ exports.updateDomainName = async (req, res) => {
       organization: domainDoc.organization,
       id: domainDoc.id,
       platform: domainDoc.platform,
+      vertical: domainDoc.vertical,
       rtkID: domainDoc.rtkID,
       certificationTags: domainDoc.certificationTags,
       assignedTo: domainDoc.assignedTo,
@@ -952,6 +971,7 @@ exports.updateDomainName = async (req, res) => {
       organization: domainDoc.organization,
       id: domainDoc.id,
       platform: domainDoc.platform,
+      vertical: domainDoc.vertical,
       rtkID: domainDoc.rtkID,
       certificationTags: domainDoc.certificationTags,
       assignedTo: domainDoc.assignedTo,
@@ -1037,6 +1057,21 @@ exports.updateDomainName = async (req, res) => {
       domainDoc.assignedTo = newAssignedTo;
     }
 
+    if (newVertical !== undefined) {
+      if (newVertical === null || newVertical === "") {
+        newValues.vertical = null;
+        domainDoc.vertical = null;
+      } else if (!isValidDomainVertical(newVertical)) {
+        return res.status(400).json({
+          error: "Invalid vertical",
+          details: `Must be one of: ${DOMAIN_VERTICALS.join(", ")}`,
+        });
+      } else {
+        newValues.vertical = newVertical;
+        domainDoc.vertical = newVertical;
+      }
+    }
+
     // Save the updated domain
     const updatedDomain = await domainDoc.save();
 
@@ -1065,6 +1100,7 @@ exports.updateDomainName = async (req, res) => {
       oldValues.organization !== newValues.organization ||
       oldValues.id !== newValues.id ||
       oldValues.platform !== newValues.platform ||
+      oldValues.vertical !== newValues.vertical ||
       oldValues.rtkID !== newValues.rtkID ||
       JSON.stringify(oldValues.certificationTags) !==
         JSON.stringify(newValues.certificationTags) ||
@@ -1077,6 +1113,7 @@ exports.updateDomainName = async (req, res) => {
         organization: updatedDomain.organization,
         id: updatedDomain.id,
         platform: updatedDomain.platform,
+        vertical: updatedDomain.vertical,
         rtkID: updatedDomain.rtkID,
         certificationTags: updatedDomain.certificationTags,
         assignedTo: updatedDomain.assignedTo,
