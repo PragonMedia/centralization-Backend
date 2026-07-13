@@ -7,10 +7,11 @@
 const RINGBA_FAKE_TARGET_PING_TOKEN =
   process.env.RINGBA_FAKE_TARGET_PING_TOKEN || "";
 
-/** Response shape — configure Ringba Call Acceptance Parsing: available Equals true */
+/** Response shape for Ringba RTT parsing (always reject; never route calls). */
 const REJECT_RESPONSE = Object.freeze({
   available: false,
   bid: 0,
+  duration: 0,
 });
 
 module.exports = {
