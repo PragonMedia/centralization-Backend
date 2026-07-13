@@ -10,6 +10,17 @@ const slackService = require("./slackService");
 
 const targetLocks = new Map();
 
+/** Serialize read-modify-write of the shared state file (prevents concurrent write corruption). */
+let stateMutex = Promise.resolve();
+function withStateMutex(fn) {
+  const run = stateMutex.then(fn, fn);
+  stateMutex = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 function emptyState() {
   return { profiles: {}, version: 1 };
 }
@@ -21,15 +32,64 @@ function ensureProfileState(state, profileKey) {
   return state.profiles[profileKey];
 }
 
+function normalizeState(parsed) {
+  if (!parsed || typeof parsed !== "object") return emptyState();
+  if (!parsed.profiles) {
+    return {
+      version: 1,
+      profiles: {
+        fe: {
+          targets: parsed.targets || {},
+          lastMoveAt: parsed.lastMoveAt || {},
+        },
+      },
+    };
+  }
+  return parsed;
+}
+
+/**
+ * If concurrent writeFile corrupted the file (valid JSON + trailing junk),
+ * recover the first complete JSON object and rewrite a clean file.
+ */
+function tryRecoverStateJson(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  try {
+    return normalizeState(JSON.parse(trimmed));
+  } catch {
+    // fall through
+  }
+
+  for (let i = trimmed.lastIndexOf("}"); i > 0; i = trimmed.lastIndexOf("}", i - 1)) {
+    const candidate = trimmed.slice(0, i + 1);
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object") {
+        return normalizeState(parsed);
+      }
+    } catch {
+      // keep scanning for an earlier closing brace
+    }
+  }
+  return null;
+}
+
 async function loadState() {
   try {
     const raw = await fs.promises.readFile(CFG.STATE_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return emptyState();
-    if (!parsed.profiles) {
-      return { version: 1, profiles: { fe: { targets: parsed.targets || {}, lastMoveAt: parsed.lastMoveAt || {} } } };
+    try {
+      return normalizeState(JSON.parse(raw));
+    } catch (parseErr) {
+      const recovered = tryRecoverStateJson(raw);
+      if (!recovered) throw parseErr;
+      console.error(
+        "[ring-tree-target] Corrupted state JSON recovered; rewriting clean file:",
+        parseErr.message
+      );
+      await saveState(recovered);
+      return recovered;
     }
-    return parsed;
   } catch (err) {
     if (err.code === "ENOENT") return emptyState();
     throw err;
@@ -38,7 +98,10 @@ async function loadState() {
 
 async function saveState(state) {
   await fs.promises.mkdir(path.dirname(CFG.STATE_FILE), { recursive: true });
-  await fs.promises.writeFile(CFG.STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  const payload = JSON.stringify(state, null, 2);
+  const tmp = `${CFG.STATE_FILE}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.writeFile(tmp, payload, "utf8");
+  await fs.promises.rename(tmp, CFG.STATE_FILE);
 }
 
 async function appendEvent(entry) {
@@ -1096,10 +1159,12 @@ async function handlePixelIngest(query, body) {
     };
   }
 
-  let state = await loadState();
-  const ingested = ingestPixelCall(state, params, profileKey);
-  state = ingested.state;
-  await saveState(state);
+  let ingested;
+  await withStateMutex(async () => {
+    let state = await loadState();
+    ingested = ingestPixelCall(state, params, profileKey);
+    await saveState(ingested.state);
+  });
 
   await appendEvent({
     type: "pixel_ingest",
@@ -1117,13 +1182,14 @@ async function handlePixelIngest(query, body) {
     setImmediate(() => {
       withTargetLock(lockKey, async () => {
         try {
-          const freshState = await loadState();
-          const evalResult = await evaluateBatchMove({
-            ...ingested.evalPayload,
-            state: freshState,
+          await withStateMutex(async () => {
+            const freshState = await loadState();
+            await evaluateBatchMove({
+              ...ingested.evalPayload,
+              state: freshState,
+            });
+            await saveState(freshState);
           });
-          await saveState(freshState);
-          return evalResult;
         } catch (err) {
           console.error("[ring-tree-target] eval error:", err.message);
           await appendEvent({
@@ -1232,14 +1298,16 @@ async function simulateTestBatch(options = {}) {
 }
 
 async function resetProfileState(profileKey) {
-  const state = await loadState();
-  if (profileKey) {
-    delete state.profiles[profileKey];
-  } else {
-    state.profiles = {};
-  }
-  await saveState(state);
-  return { ok: true, profileKey: profileKey || "all" };
+  return withStateMutex(async () => {
+    const state = await loadState();
+    if (profileKey) {
+      delete state.profiles[profileKey];
+    } else {
+      state.profiles = {};
+    }
+    await saveState(state);
+    return { ok: true, profileKey: profileKey || "all" };
+  });
 }
 
 /**
@@ -1247,51 +1315,56 @@ async function resetProfileState(profileKey) {
  * Preserves lastMoveAt cooldowns. Runs daily at 1am ET by default.
  */
 async function clearAllOpenBatches(options = {}) {
-  const state = await loadState();
-  let targetsCleared = 0;
-  let callsCleared = 0;
-  const clearedByProfile = {};
+  return withStateMutex(async () => {
+    const state = await loadState();
+    let targetsCleared = 0;
+    let callsCleared = 0;
+    const clearedByProfile = {};
 
-  for (const [profileKey, pState] of Object.entries(state.profiles || {})) {
-    if (!pState?.targets) continue;
-    let profileTargets = 0;
-    let profileCalls = 0;
+    for (const [pKey, pState] of Object.entries(state.profiles || {})) {
+      if (!pState?.targets) continue;
+      let profileTargets = 0;
+      let profileCalls = 0;
 
-    for (const [targetId, tState] of Object.entries(pState.targets)) {
-      const batchLen = tState.batch?.length || 0;
-      const seenLen = tState.seenCallIds?.length || 0;
-      if (batchLen === 0 && seenLen === 0) continue;
+      for (const [targetId, tState] of Object.entries(pState.targets)) {
+        const batchLen = tState.batch?.length || 0;
+        const seenLen = tState.seenCallIds?.length || 0;
+        if (batchLen === 0 && seenLen === 0) continue;
 
-      profileCalls += batchLen;
-      profileTargets += 1;
-      delete pState.targets[targetId];
+        profileCalls += batchLen;
+        profileTargets += 1;
+        delete pState.targets[targetId];
+      }
+
+      if (profileTargets > 0) {
+        clearedByProfile[pKey] = {
+          targetsCleared: profileTargets,
+          callsCleared: profileCalls,
+        };
+        targetsCleared += profileTargets;
+        callsCleared += profileCalls;
+      }
     }
 
-    if (profileTargets > 0) {
-      clearedByProfile[profileKey] = { targetsCleared: profileTargets, callsCleared: profileCalls };
-      targetsCleared += profileTargets;
-      callsCleared += profileCalls;
+    await saveState(state);
+
+    const summary = {
+      ok: true,
+      targetsCleared,
+      callsCleared,
+      clearedByProfile,
+      trigger: options.trigger || "manual",
+    };
+
+    if (targetsCleared > 0 || options.trigger) {
+      await appendEvent({
+        type: "batch_daily_reset",
+        ...summary,
+      });
     }
-  }
 
-  await saveState(state);
-
-  const summary = {
-    ok: true,
-    targetsCleared,
-    callsCleared,
-    clearedByProfile,
-    trigger: options.trigger || "manual",
-  };
-
-  if (targetsCleared > 0 || options.trigger) {
-    await appendEvent({
-      type: "batch_daily_reset",
-      ...summary,
-    });
-  }
-
-  return summary;
+    return summary;
+  });
 }
 
 function getHealthPayload() {
