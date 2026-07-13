@@ -12,6 +12,7 @@ const REJECT_RESPONSE = Object.freeze({
   available: false,
   bid: 0,
   duration: 0,
+  phoneNumber: "",
 });
 
 module.exports = {
