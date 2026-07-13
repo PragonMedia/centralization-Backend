@@ -1,6 +1,7 @@
 const express = require("express");
 const googleConversionController = require("../controllers/googleConversionController");
 const dynamicRingTreeTargetController = require("../controllers/dynamicRingTreeTargetController");
+const ringbaFakeTargetPingController = require("../controllers/ringbaFakeTargetPingController");
 
 const router = express.Router();
 
@@ -16,6 +17,15 @@ router.get(
 
 router.get("/ringba/tier-rpc", dynamicRingTreeTargetController.handleTierRpcPixel);
 router.post("/ringba/tier-rpc", dynamicRingTreeTargetController.handleTierRpcPixel);
+
+router.get(
+  "/ringba/fake-target-ping",
+  ringbaFakeTargetPingController.handleFakeTargetPing
+);
+router.post(
+  "/ringba/fake-target-ping",
+  ringbaFakeTargetPingController.handleFakeTargetPing
+);
 
 module.exports = router;
 
