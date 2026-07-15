@@ -17,6 +17,47 @@ const GOOGLE_CONVERSION_LOG_FILE = path.join(
   "google-conversions.jsonl"
 );
 
+/** Total attempts for OAuth + upload (1 = no retry). Transient errors only. */
+function getUploadMaxAttempts() {
+  const parsed = parseInt(
+    String(process.env.GOOGLE_ADS_UPLOAD_MAX_ATTEMPTS || "3").trim(),
+    10
+  );
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.min(parsed, 5) : 3;
+}
+
+function getUploadRetryBaseMs() {
+  const parsed = parseInt(
+    String(process.env.GOOGLE_ADS_UPLOAD_RETRY_BASE_MS || "1000").trim(),
+    10
+  );
+  return Number.isFinite(parsed) && parsed >= 100 ? parsed : 1000;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Timeouts, network drops, and Google 429/5xx — safe to retry. */
+function isTransientGoogleError(error) {
+  if (!error) return false;
+  const code = error.code;
+  if (
+    code === "ECONNABORTED" ||
+    code === "ETIMEDOUT" ||
+    code === "ECONNRESET" ||
+    code === "EAI_AGAIN" ||
+    code === "ENOTFOUND" ||
+    code === "EPIPE"
+  ) {
+    return true;
+  }
+  const msg = String(error.message || "").toLowerCase();
+  if (msg.includes("timeout")) return true;
+  const status = error.response?.status;
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
 function isTruthyEnv(value) {
   if (value == null) return false;
   const normalized = String(value).trim().toLowerCase();
@@ -277,6 +318,9 @@ function formatGoogleConversionSlackAlert({ result, source, exception, callID } 
       lines.push(`Google Ads API status: ${exception.response.status}`);
     }
     lines.push(`Message: ${exception.message}`);
+    if (exception.attempts) {
+      lines.push(`Attempts: ${exception.attempts}`);
+    }
     const apiSummary = extractGoogleFailureSummary(exception.response?.data);
     if (apiSummary) lines.push(`Google details: ${apiSummary}`);
   }
@@ -351,7 +395,6 @@ async function uploadGoogleClickConversion(payload = {}) {
       return result;
     }
 
-    const accessToken = await getGoogleAccessToken();
     const { developerToken } = getGoogleAdsEnv();
     const requestBody = buildUploadPayload({
       conversionActionId,
@@ -361,62 +404,114 @@ async function uploadGoogleClickConversion(payload = {}) {
       conversionValue,
       currencyCode,
     });
-
     const url = `${GOOGLE_ADS_API_BASE}/customers/${GOOGLE_CUSTOMER_ID}:uploadClickConversions`;
-    const response = await axios.post(url, requestBody, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "developer-token": developerToken,
-        "login-customer-id": GOOGLE_LOGIN_CUSTOMER_ID,
-        "Content-Type": "application/json",
-      },
-      timeout: 30000,
-    });
+    const maxAttempts = getUploadMaxAttempts();
+    const retryBaseMs = getUploadRetryBaseMs();
+    let lastError = null;
 
-    const partialFailure = parseGooglePartialFailure(response.data);
-    if (partialFailure) {
-      const result = attachCallIdToErrorResult(
-        {
-          ok: false,
-          statusCode: 500,
-          error: "google_upload_partial_failure",
-          message: "google upload partial failure",
-          details: partialFailure,
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const accessToken = await getGoogleAccessToken();
+        const response = await axios.post(url, requestBody, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "developer-token": developerToken,
+            "login-customer-id": GOOGLE_LOGIN_CUSTOMER_ID,
+            "Content-Type": "application/json",
+          },
+          timeout: 30000,
+        });
+
+        const partialFailure = parseGooglePartialFailure(response.data);
+        if (partialFailure) {
+          const result = attachCallIdToErrorResult(
+            {
+              ok: false,
+              statusCode: 500,
+              error: "google_upload_partial_failure",
+              message: "google upload partial failure",
+              details: partialFailure,
+              clickIdType: clickId.clickIdType,
+              conversionActionId,
+              conversionDateTime,
+              attempts: attempt,
+            },
+            callId
+          );
+          await writeGoogleConversionLog({
+            ...logContext,
+            attempt,
+            outcome: "partial_failure",
+            result,
+          });
+          return result;
+        }
+
+        const result = {
+          ok: true,
+          uploaded: true,
           clickIdType: clickId.clickIdType,
           conversionActionId,
           conversionDateTime,
-        },
-        callId
-      );
-      await writeGoogleConversionLog({
-        ...logContext,
-        outcome: "partial_failure",
-        result,
-      });
-      return result;
+          validateOnly: getValidateOnly(),
+          attempts: attempt,
+          results: response.data?.results || [],
+        };
+        await writeGoogleConversionLog({
+          ...logContext,
+          attempt,
+          outcome: "success",
+          result,
+        });
+        return result;
+      } catch (error) {
+        lastError = error;
+        const retryable =
+          isTransientGoogleError(error) && attempt < maxAttempts;
+
+        await writeGoogleConversionLog({
+          ...logContext,
+          attempt,
+          outcome: retryable ? "retry" : "exception",
+          error: {
+            message: error.message,
+            code: error.code || null,
+            status: error.response?.status || null,
+            data: error.response?.data || null,
+            retryable,
+          },
+        });
+
+        if (!retryable) {
+          error.attempts = attempt;
+          throw error;
+        }
+
+        const delayMs = retryBaseMs * Math.pow(2, attempt - 1);
+        console.warn(
+          `[google-conversion] transient error on attempt ${attempt}/${maxAttempts}: ${error.message}; retrying in ${delayMs}ms`
+        );
+        await sleep(delayMs);
+      }
     }
 
-    const result = {
-      ok: true,
-      uploaded: true,
-      clickIdType: clickId.clickIdType,
-      conversionActionId,
-      conversionDateTime,
-      validateOnly: getValidateOnly(),
-      results: response.data?.results || [],
-    };
-    await writeGoogleConversionLog({ ...logContext, outcome: "success", result });
-    return result;
+    if (lastError) {
+      lastError.attempts = maxAttempts;
+      throw lastError;
+    }
+    throw new Error("Google conversion upload failed with no attempts.");
   } catch (error) {
-    await writeGoogleConversionLog({
-      ...logContext,
-      outcome: "exception",
-      error: {
-        message: error.message,
-        status: error.response?.status || null,
-        data: error.response?.data || null,
-      },
-    });
+    if (error?.attempts == null) {
+      await writeGoogleConversionLog({
+        ...logContext,
+        outcome: "exception",
+        error: {
+          message: error.message,
+          status: error.response?.status || null,
+          data: error.response?.data || null,
+        },
+      });
+    }
     throw error;
   }
 }
@@ -427,5 +522,6 @@ module.exports = {
   formatGoogleConversionSlackAlert,
   extractGoogleFailureSummary,
   resolveCallId,
+  isTransientGoogleError,
 };
 
