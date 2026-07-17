@@ -53,7 +53,7 @@ exports.getFeRingTrees = async (req, res) => {
   }
 };
 
-/** Ringba tracking pixel — GET/POST query params */
+/** Ringba tracking pixel — GET/POST (vertical from query/body, or defaults via resolve) */
 exports.handleTierRpcPixel = async (req, res) => {
   try {
     const result = await dynamicRingTreeTargetService.handlePixelIngest(req.query || {}, req.body || {});
@@ -61,6 +61,35 @@ exports.handleTierRpcPixel = async (req, res) => {
     return res.status(statusCode).json(result);
   } catch (err) {
     console.error("RingTreeTarget pixel error:", err);
+    return res.status(500).json({ ok: false, status: "error", message: err.message });
+  }
+};
+
+/**
+ * Path-locked vertical pixel — use separate Ringba pixels per campaign:
+ *   /webhooks/ringba/tier-rpc/fe
+ *   /webhooks/ringba/tier-rpc/medicare
+ * Path vertical always wins over body/query so shared pixel edits cannot cross-wire profiles.
+ */
+exports.handleTierRpcPixelForVertical = async (req, res) => {
+  try {
+    const vertical = String(req.params?.vertical || "")
+      .trim()
+      .toLowerCase();
+    if (!vertical || !CFG.getProfiles()[vertical]) {
+      return res.status(404).json({
+        ok: false,
+        status: "unknown_profile",
+        message: `Unknown vertical in path: ${vertical || "(empty)"}. Use fe, medicare, debt, or aca.`,
+      });
+    }
+    const query = { ...(req.query || {}), vertical };
+    const body = { ...(req.body && typeof req.body === "object" ? req.body : {}), vertical };
+    const result = await dynamicRingTreeTargetService.handlePixelIngest(query, body);
+    const statusCode = result.ok === false && result.status === "invalid_payload" ? 400 : 200;
+    return res.status(statusCode).json(result);
+  } catch (err) {
+    console.error("RingTreeTarget pixel (path vertical) error:", err);
     return res.status(500).json({ ok: false, status: "error", message: err.message });
   }
 };
