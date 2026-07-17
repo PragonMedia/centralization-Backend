@@ -1028,7 +1028,7 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc:
 
   if (profileDryRun) {
     await appendEvent({ type: "dry_run_move", ...moveSummary, action: "dry_run_move" });
-    await slackService.sendSlackMessage(
+    await slackService.sendRingTreeSlackMessage(
       formatRingTreeMoveSlackMessage({
         targetName: displayName,
         currentTier,
@@ -1061,7 +1061,7 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc:
       addMethod: addResult.method,
       finalTargetId: finalTargetId !== resolvedTargetId ? finalTargetId : undefined,
     });
-    await slackService.sendSlackMessage(
+    await slackService.sendRingTreeSlackMessage(
       formatRingTreeMoveSlackMessage({
         targetName: displayName,
         currentTier,
@@ -1087,7 +1087,7 @@ async function evaluateBatchMove({ profileKey, targetId, targetName, batch, rpc:
       error: err.message,
       rollbackError,
     });
-    await slackService.sendSlackMessage(
+    await slackService.sendRingTreeSlackMessage(
       `Ring Tree move FAILED (${profile.label})\nTarget: ${displayName} (${resolvedTargetId})\nError: ${err.message}${
         rollbackError
           ? `\nRollback to ${shortTierLabel(currentTier)} also failed: ${rollbackError}`
