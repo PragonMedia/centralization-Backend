@@ -193,7 +193,7 @@ function isProfileDryRun(profile) {
 }
 
 module.exports = {
-  BATCH_SIZE: Math.max(1, parseInt(process.env.DYNAMIC_RING_TREE_BATCH_SIZE || "15", 10) || 15),
+  BATCH_SIZE: Math.max(1, parseInt(process.env.DYNAMIC_RING_TREE_BATCH_SIZE || "20", 10) || 20),
   RPC_TIER1_MIN: FE_RPC_RULES.tier1Min,
   RPC_TIER2_MIN: FE_RPC_RULES.tier2Min,
   HYSTERESIS: FE_HYSTERESIS,
