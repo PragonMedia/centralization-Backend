@@ -18,12 +18,12 @@ function tier(name, pingTreeId) {
   return { name, pingTreeId: (pingTreeId || "").trim() };
 }
 
-const FE_RPC_RULES = { mode: "min", tier1Min: 30, tier2Min: 20 };
+const FE_RPC_RULES = { mode: "min", tier1Min: 20, tier2Min: 15 };
 const FE_HYSTERESIS = {
-  promoteToTier1: 31,
-  demoteFromTier1: 29,
-  promoteToTier2: 21,
-  demoteFromTier2: 19,
+  promoteToTier1: 21,
+  demoteFromTier1: 19,
+  promoteToTier2: 16,
+  demoteFromTier2: 14,
 };
 
 const MEDICARE_RPC_RULES = { mode: "above", tier1Above: 11, tier2Min: 8 };
