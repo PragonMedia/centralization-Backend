@@ -1,5 +1,4 @@
 const mongoose = require("mongoose");
-const { DOMAIN_VERTICALS } = require("../config/domainVerticals");
 
 const routeSchema = new mongoose.Schema({
   route: { type: String, required: true },
@@ -39,7 +38,6 @@ const domainSchema = new mongoose.Schema(
     },
     vertical: {
       type: String,
-      enum: DOMAIN_VERTICALS,
       required: false,
     },
     rtkID: { type: String, required: false },

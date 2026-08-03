@@ -11,10 +11,6 @@ const {
 } = require("../services/cloudflareProxyEnable");
 const templateService = require("../services/templateService");
 const CLOUDFLARE_CONFIG = require("../config/cloudflare");
-const {
-  DOMAIN_VERTICALS,
-  isValidDomainVertical,
-} = require("../config/domainVerticals");
 const axios = require("axios");
 const cacheService = require("../services/cacheService");
 const phpFpmMonitor = require("../services/phpFpmMonitor");
@@ -289,11 +285,11 @@ exports.createDomain = async (req, res) => {
       });
     }
 
-    if (!isValidDomainVertical(vertical)) {
+    if (typeof vertical !== "string" || vertical.trim().length === 0) {
       console.error(`❌ Validation failed: Invalid vertical: ${vertical}`);
       return res.status(400).json({
         error: "Invalid vertical",
-        details: `Must be one of: ${DOMAIN_VERTICALS.join(", ")}`,
+        details: "Vertical must be a non-empty string",
         provided: vertical,
       });
     }
@@ -417,7 +413,7 @@ exports.createDomain = async (req, res) => {
         organization: organization || "Paragon",
         id,
         platform,
-        vertical,
+        vertical: vertical.trim(),
         rtkID: rtkID || null,
         certificationTags: certificationTags || [],
         routes: [],
@@ -1061,14 +1057,14 @@ exports.updateDomainName = async (req, res) => {
       if (newVertical === null || newVertical === "") {
         newValues.vertical = null;
         domainDoc.vertical = null;
-      } else if (!isValidDomainVertical(newVertical)) {
+      } else if (typeof newVertical !== "string" || newVertical.trim().length === 0) {
         return res.status(400).json({
           error: "Invalid vertical",
-          details: `Must be one of: ${DOMAIN_VERTICALS.join(", ")}`,
+          details: "Vertical must be a non-empty string",
         });
       } else {
-        newValues.vertical = newVertical;
-        domainDoc.vertical = newVertical;
+        newValues.vertical = newVertical.trim();
+        domainDoc.vertical = newVertical.trim();
       }
     }
 
