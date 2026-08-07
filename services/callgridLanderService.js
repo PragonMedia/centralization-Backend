@@ -98,8 +98,14 @@ async function listCampaigns() {
 }
 
 /**
- * Media buyers for a campaign = sources that have a phoneNumber on that campaign.
- * campaignSourceId for the lander SDK = source.id (phone.campaignSourceId is null today).
+ * Media buyers for a campaign = CallGrid campaignSource rows for that campaign.
+ *
+ * SDK assign requires campaignSource.id (NOT Source.id).
+ * GET /api/campaignSource?campaignId=… returns:
+ *   id            → real SDK campaignSourceId
+ *   sourceId      → Source.id (display/join only)
+ *   source.name   → media buyer name
+ *   phoneNumber   → assigned number
  */
 async function listMediaBuyersForCampaign(campaignId) {
   if (!campaignId) {
@@ -108,39 +114,68 @@ async function listMediaBuyersForCampaign(campaignId) {
     throw err;
   }
 
-  const [sourcesPayload, phonesPayload, orgPayload] = await Promise.all([
-    callgridGet("/api/source"),
-    callgridGet("/api/phoneNumber"),
+  const [campaignSourcesPayload, orgPayload] = await Promise.all([
+    callgridGet(
+      `/api/campaignSource?campaignId=${encodeURIComponent(campaignId)}`,
+    ),
     callgridGet("/api/organization"),
   ]);
 
-  const sources = asArray(sourcesPayload);
-  const phones = asArray(phonesPayload);
+  const campaignSources = asArray(campaignSourcesPayload);
   const organizationId = resolveOrganizationId(orgPayload);
 
-  const phonesOnCampaign = phones.filter(
-    (p) => p.campaignId === campaignId && p.sourceId,
-  );
-
-  const bySourceId = new Map();
-  for (const phone of phonesOnCampaign) {
-    if (!bySourceId.has(phone.sourceId)) {
-      bySourceId.set(phone.sourceId, phone);
-    }
-  }
-
   const mediaBuyers = [];
-  for (const [sourceId, phone] of bySourceId.entries()) {
-    const source = sources.find((s) => s.id === sourceId);
+  const skipped = [];
+
+  for (const row of campaignSources) {
+    const campaignSourceId =
+      typeof row?.id === "string" ? row.id.trim() : "";
+    const sourceId =
+      typeof row?.sourceId === "string"
+        ? row.sourceId.trim()
+        : typeof row?.source?.id === "string"
+          ? row.source.id.trim()
+          : "";
+
+    // Never substitute Source.id — SDK assign 404s on that value.
+    if (!campaignSourceId) {
+      skipped.push({
+        reason: "missing_campaign_source_id",
+        sourceId: sourceId || null,
+        name: row?.source?.name || null,
+      });
+      continue;
+    }
+    if (sourceId && campaignSourceId === sourceId) {
+      skipped.push({
+        reason: "campaign_source_id_equals_source_id",
+        sourceId,
+        name: row?.source?.name || null,
+      });
+      continue;
+    }
+
+    const phoneNumber =
+      row?.phoneNumber?.phoneNumber ||
+      (Array.isArray(row?.phoneNumbers) && row.phoneNumbers[0]?.phoneNumber) ||
+      null;
+    const phoneNumberId =
+      row?.phoneNumberId ||
+      row?.phoneNumber?.id ||
+      (Array.isArray(row?.phoneNumbers) && row.phoneNumbers[0]?.id) ||
+      null;
+
     mediaBuyers.push({
-      id: sourceId,
-      name: source?.name || sourceId,
-      sourceId,
-      campaignSourceId: phone.campaignSourceId || sourceId,
-      phoneNumber: phone.phoneNumber || null,
-      phoneNumberId: phone.id || null,
-      active: source?.active !== false,
-      vendorId: source?.vendorId || null,
+      id: campaignSourceId,
+      name: row?.source?.name || sourceId || campaignSourceId,
+      sourceId: sourceId || null,
+      campaignSourceId,
+      phoneNumber,
+      phoneNumberId,
+      active: row?.source?.paused !== true && row?.paused !== true,
+      vendorId: row?.source?.vendorId || null,
+      numberPoolId: row?.numberPoolId || row?.numberPool?.id || null,
+      capped: Boolean(row?.capped),
     });
   }
 
@@ -154,6 +189,8 @@ async function listMediaBuyersForCampaign(campaignId) {
     organizationId,
     campaignId,
     mediaBuyers,
+    skippedCount: skipped.length,
+    skipped: skipped.length ? skipped : undefined,
   };
 }
 
