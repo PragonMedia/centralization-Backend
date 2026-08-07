@@ -1,6 +1,22 @@
 const googleConversionService = require("../services/googleConversionService");
 const slackService = require("../services/slackService");
 
+/**
+ * Merge body + query. Query `mcc` wins so Ringba/RedTrack can set ?mcc=1 on the URL.
+ */
+function buildConversionPayload(req) {
+  const body =
+    req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? { ...req.body }
+      : {};
+  const query = req.query && typeof req.query === "object" ? req.query : {};
+  const payload = { ...query, ...body };
+  if (query.mcc != null && String(query.mcc).trim() !== "") {
+    payload.mcc = query.mcc;
+  }
+  return payload;
+}
+
 async function notifyGoogleConversionFailure(result, source, callID) {
   if (!googleConversionService.shouldNotifyGoogleConversionSlack(result)) return;
   const message = googleConversionService.formatGoogleConversionSlackAlert({
@@ -22,7 +38,8 @@ async function notifyGoogleConversionException(error, source, callID) {
 
 async function handleRingbaGoogleConversion(req, res) {
   const source = "Ringba webhook (POST /webhooks/ringba/google-conversion)";
-  const callID = googleConversionService.resolveCallId(req.body || {});
+  const payload = buildConversionPayload(req);
+  const callID = googleConversionService.resolveCallId(payload);
   try {
     if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
       return res.status(400).json({
@@ -33,18 +50,23 @@ async function handleRingbaGoogleConversion(req, res) {
       });
     }
 
-    const result = await googleConversionService.uploadGoogleClickConversion(req.body);
+    const result = await googleConversionService.uploadGoogleClickConversion(payload);
     await notifyGoogleConversionFailure(result, source, callID);
     return res.status(result.statusCode || 200).json(result);
   } catch (error) {
     await notifyGoogleConversionException(error, source, callID);
-    const status = error.response?.status;
+    const status = error.statusCode || error.response?.status;
     const details = error.response?.data;
-    return res.status(500).json({
+    return res.status(status && status >= 400 && status < 600 ? status : 500).json({
       ok: false,
-      error: "google_conversion_upload_failed",
+      error:
+        error.code === "mcc1_config_missing"
+          ? "mcc1_config_missing"
+          : "google_conversion_upload_failed",
       message: status ? `Google Ads API error (${status})` : error.message,
       details: details || undefined,
+      ...(error.accountKey ? { accountKey: error.accountKey } : {}),
+      ...(error.googleCustomerId ? { googleCustomerId: error.googleCustomerId } : {}),
       ...(callID ? { callID } : {}),
     });
   }
@@ -52,7 +74,7 @@ async function handleRingbaGoogleConversion(req, res) {
 
 async function handleRedTrackGoogleConversion(req, res) {
   const source = "RedTrack postback (GET /webhooks/ringba/google-conversion?rt=1)";
-  const payloadPreview = { ...req.query, ...(req.body || {}) };
+  const payloadPreview = buildConversionPayload(req);
   const callID = googleConversionService.resolveCallId(payloadPreview);
   try {
     const rt = req.query?.rt || req.body?.rt;
@@ -68,13 +90,18 @@ async function handleRedTrackGoogleConversion(req, res) {
     return res.status(result.statusCode || 200).json(result);
   } catch (error) {
     await notifyGoogleConversionException(error, source, callID);
-    const status = error.response?.status;
+    const status = error.statusCode || error.response?.status;
     const details = error.response?.data;
-    return res.status(500).json({
+    return res.status(status && status >= 400 && status < 600 ? status : 500).json({
       ok: false,
-      error: "google_conversion_upload_failed",
+      error:
+        error.code === "mcc1_config_missing"
+          ? "mcc1_config_missing"
+          : "google_conversion_upload_failed",
       message: status ? `Google Ads API error (${status})` : error.message,
       details: details || undefined,
+      ...(error.accountKey ? { accountKey: error.accountKey } : {}),
+      ...(error.googleCustomerId ? { googleCustomerId: error.googleCustomerId } : {}),
       ...(callID ? { callID } : {}),
     });
   }

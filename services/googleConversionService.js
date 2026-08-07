@@ -6,8 +6,12 @@ const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_ADS_API_VERSION = (process.env.GOOGLE_ADS_API_VERSION || "v22").trim();
 const GOOGLE_ADS_API_BASE = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}`;
 
-const GOOGLE_CUSTOMER_ID = "4316986825";
-const GOOGLE_LOGIN_CUSTOMER_ID = "4316986825";
+/** Default Paragon Ads account — used when mcc is absent / not "1". */
+const DEFAULT_GOOGLE_CUSTOMER_ID = "4316986825";
+const DEFAULT_GOOGLE_LOGIN_CUSTOMER_ID = "4316986825";
+/** Inception Point Media client under MCC — used when mcc=1 (overridable via env). */
+const DEFAULT_MCC1_CUSTOMER_ID = "3885007144";
+const DEFAULT_MCC1_LOGIN_CUSTOMER_ID = "9126998560";
 const GOOGLE_CONVERSION_VALUE = 1;
 const GOOGLE_CURRENCY_CODE = "USD";
 const GOOGLE_CONVERSION_LOG_FILE = path.join(
@@ -16,6 +20,84 @@ const GOOGLE_CONVERSION_LOG_FILE = path.join(
   "logs",
   "google-conversions.jsonl"
 );
+
+function envTrim(name, fallback = "") {
+  const raw = process.env[name];
+  if (raw == null || String(raw).trim() === "") return fallback;
+  return String(raw).trim();
+}
+
+/** mcc=1 → MCC1 account pack; anything else → default Paragon. */
+function isMcc1(payload = {}) {
+  return String(payload.mcc ?? "").trim() === "1";
+}
+
+/**
+ * Resolve which Google Ads account + OAuth pack to use.
+ * Default path stays on existing GOOGLE_ADS_* + 4316986825.
+ * mcc=1 requires GOOGLE_ADS_MCC1_* (client id/secret may fall back to default OAuth client).
+ */
+function resolveGoogleAdsAccount(payload = {}) {
+  if (isMcc1(payload)) {
+    const googleCustomerId =
+      envTrim("GOOGLE_ADS_MCC1_CUSTOMER_ID", DEFAULT_MCC1_CUSTOMER_ID) ||
+      DEFAULT_MCC1_CUSTOMER_ID;
+    const loginCustomerId =
+      envTrim("GOOGLE_ADS_MCC1_LOGIN_CUSTOMER_ID", DEFAULT_MCC1_LOGIN_CUSTOMER_ID) ||
+      DEFAULT_MCC1_LOGIN_CUSTOMER_ID;
+    const clientId =
+      envTrim("GOOGLE_ADS_MCC1_CLIENT_ID") || envTrim("GOOGLE_ADS_CLIENT_ID");
+    const clientSecret =
+      envTrim("GOOGLE_ADS_MCC1_CLIENT_SECRET") ||
+      envTrim("GOOGLE_ADS_CLIENT_SECRET");
+    const developerToken = envTrim("GOOGLE_ADS_MCC1_DEVELOPER_TOKEN");
+    const refreshToken = envTrim("GOOGLE_ADS_MCC1_REFRESH_TOKEN");
+
+    if (!clientId || !clientSecret || !developerToken || !refreshToken) {
+      const error = new Error(
+        "Missing MCC1 Google Ads env vars. Required: GOOGLE_ADS_MCC1_DEVELOPER_TOKEN, GOOGLE_ADS_MCC1_REFRESH_TOKEN (and client id/secret via MCC1 or default GOOGLE_ADS_*)."
+      );
+      error.code = "mcc1_config_missing";
+      error.statusCode = 503;
+      throw error;
+    }
+
+    return {
+      accountKey: "mcc1",
+      googleCustomerId,
+      loginCustomerId,
+      clientId,
+      clientSecret,
+      developerToken,
+      refreshToken,
+    };
+  }
+
+  const clientId = envTrim("GOOGLE_ADS_CLIENT_ID");
+  const clientSecret = envTrim("GOOGLE_ADS_CLIENT_SECRET");
+  const developerToken = envTrim("GOOGLE_ADS_DEVELOPER_TOKEN");
+  const refreshToken = envTrim("GOOGLE_ADS_REFRESH_TOKEN");
+
+  if (!clientId || !clientSecret || !developerToken || !refreshToken) {
+    throw new Error(
+      "Missing Google Ads env vars. Required: GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_REFRESH_TOKEN."
+    );
+  }
+
+  return {
+    accountKey: "default",
+    googleCustomerId:
+      envTrim("GOOGLE_ADS_CUSTOMER_ID", DEFAULT_GOOGLE_CUSTOMER_ID) ||
+      DEFAULT_GOOGLE_CUSTOMER_ID,
+    loginCustomerId:
+      envTrim("GOOGLE_ADS_LOGIN_CUSTOMER_ID", DEFAULT_GOOGLE_LOGIN_CUSTOMER_ID) ||
+      DEFAULT_GOOGLE_LOGIN_CUSTOMER_ID,
+    clientId,
+    clientSecret,
+    developerToken,
+    refreshToken,
+  };
+}
 
 /** Total attempts for OAuth + upload (1 = no retry). Transient errors only. */
 function getUploadMaxAttempts() {
@@ -170,28 +252,8 @@ async function writeGoogleConversionLog(entry = {}) {
   }
 }
 
-function getGoogleAdsEnv() {
-  const clientId = (process.env.GOOGLE_ADS_CLIENT_ID || "").trim();
-  const clientSecret = (process.env.GOOGLE_ADS_CLIENT_SECRET || "").trim();
-  const developerToken = (process.env.GOOGLE_ADS_DEVELOPER_TOKEN || "").trim();
-  const refreshToken = (process.env.GOOGLE_ADS_REFRESH_TOKEN || "").trim();
-
-  if (!clientId || !clientSecret || !developerToken || !refreshToken) {
-    throw new Error(
-      "Missing Google Ads env vars. Required: GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_REFRESH_TOKEN."
-    );
-  }
-
-  return {
-    clientId,
-    clientSecret,
-    developerToken,
-    refreshToken,
-  };
-}
-
-async function getGoogleAccessToken() {
-  const { clientId, clientSecret, refreshToken } = getGoogleAdsEnv();
+async function getGoogleAccessToken(account) {
+  const { clientId, clientSecret, refreshToken } = account;
   const body = new URLSearchParams({
     client_id: clientId,
     client_secret: clientSecret,
@@ -211,6 +273,7 @@ async function getGoogleAccessToken() {
 
 function buildUploadPayload(input) {
   const {
+    googleCustomerId,
     conversionActionId,
     conversionDateTime,
     clickIdType,
@@ -222,7 +285,7 @@ function buildUploadPayload(input) {
   return {
     conversions: [
       {
-        conversionAction: `customers/${GOOGLE_CUSTOMER_ID}/conversionActions/${conversionActionId}`,
+        conversionAction: `customers/${googleCustomerId}/conversionActions/${conversionActionId}`,
         conversionDateTime,
         conversionValue,
         currencyCode,
@@ -288,7 +351,7 @@ function shouldNotifyGoogleConversionSlack(result) {
  */
 function formatGoogleConversionSlackAlert({ result, source, exception, callID } = {}) {
   const statusCode = exception
-    ? exception.response?.status || 500
+    ? exception.statusCode || exception.response?.status || 500
     : result?.statusCode || 500;
   const lines = [
     `GOOGLE CONVERSION FAILED [HTTP ${statusCode}]`,
@@ -297,6 +360,11 @@ function formatGoogleConversionSlackAlert({ result, source, exception, callID } 
 
   const trackingCallId = callID || result?.callID;
   if (trackingCallId) lines.push(`Call ID: ${trackingCallId}`);
+
+  const accountKey = result?.accountKey || exception?.accountKey;
+  const googleCustomerId = result?.googleCustomerId || exception?.googleCustomerId;
+  if (accountKey) lines.push(`Account: ${accountKey}`);
+  if (googleCustomerId) lines.push(`Google customer ID: ${googleCustomerId}`);
 
   if (result && !result.ok) {
     lines.push(`Error type: ${result.error || "unknown"}`);
@@ -313,7 +381,9 @@ function formatGoogleConversionSlackAlert({ result, source, exception, callID } 
   }
 
   if (exception) {
-    lines.push("Error type: google_conversion_upload_failed");
+    lines.push(
+      `Error type: ${exception.code === "mcc1_config_missing" ? "mcc1_config_missing" : "google_conversion_upload_failed"}`
+    );
     if (exception.response?.status) {
       lines.push(`Google Ads API status: ${exception.response.status}`);
     }
@@ -331,13 +401,42 @@ function formatGoogleConversionSlackAlert({ result, source, exception, callID } 
 async function uploadGoogleClickConversion(payload = {}) {
   const callId = resolveCallId(payload);
   const clickId = pickClickId(payload);
-  const conversionActionId = validateConversionActionId(payload.conversionActionId);
+  const conversionActionId = validateConversionActionId(
+    payload.conversionActionId ?? payload.conversion_action_id
+  );
   const conversionDateTime = resolveConversionDateTime(payload.conversionDateTime);
   const conversionValue = resolveConversionValue(payload);
   const currencyCode = resolveCurrencyCode(payload);
+
+  let account;
+  try {
+    account = resolveGoogleAdsAccount(payload);
+  } catch (configError) {
+    const result = attachCallIdToErrorResult(
+      {
+        ok: false,
+        statusCode: configError.statusCode || 503,
+        error: configError.code || "google_ads_config_missing",
+        message: configError.message,
+        accountKey: isMcc1(payload) ? "mcc1" : "default",
+      },
+      callId
+    );
+    await writeGoogleConversionLog({
+      accountKey: result.accountKey,
+      conversionActionId: conversionActionId || null,
+      callID: callId,
+      outcome: "config_error",
+      result,
+    });
+    return result;
+  }
+
+  const { accountKey, googleCustomerId, loginCustomerId, developerToken } = account;
   const logContext = {
-    googleCustomerId: GOOGLE_CUSTOMER_ID,
-    loginCustomerId: GOOGLE_LOGIN_CUSTOMER_ID,
+    accountKey,
+    googleCustomerId,
+    loginCustomerId,
     conversionActionId: conversionActionId || null,
     conversionDateTime,
     conversionValue,
@@ -357,6 +456,8 @@ async function uploadGoogleClickConversion(payload = {}) {
           statusCode: 400,
           error: "missing_click_id",
           message: "One of gclid, gbraid, or wbraid is required.",
+          accountKey,
+          googleCustomerId,
         },
         callId
       );
@@ -371,6 +472,8 @@ async function uploadGoogleClickConversion(payload = {}) {
           statusCode: 400,
           error: "invalid_conversion_action_id",
           message: "conversionActionId is required and must be numeric.",
+          accountKey,
+          googleCustomerId,
         },
         callId
       );
@@ -383,11 +486,12 @@ async function uploadGoogleClickConversion(payload = {}) {
         ok: true,
         uploaded: true,
         dryRun: true,
+        accountKey,
         clickIdType: clickId.clickIdType,
         conversionActionId,
         conversionDateTime,
-        googleCustomerId: GOOGLE_CUSTOMER_ID,
-        loginCustomerId: GOOGLE_LOGIN_CUSTOMER_ID,
+        googleCustomerId,
+        loginCustomerId,
         conversionValue,
         currencyCode,
       };
@@ -395,8 +499,8 @@ async function uploadGoogleClickConversion(payload = {}) {
       return result;
     }
 
-    const { developerToken } = getGoogleAdsEnv();
     const requestBody = buildUploadPayload({
+      googleCustomerId,
       conversionActionId,
       conversionDateTime,
       clickIdType: clickId.clickIdType,
@@ -404,19 +508,19 @@ async function uploadGoogleClickConversion(payload = {}) {
       conversionValue,
       currencyCode,
     });
-    const url = `${GOOGLE_ADS_API_BASE}/customers/${GOOGLE_CUSTOMER_ID}:uploadClickConversions`;
+    const url = `${GOOGLE_ADS_API_BASE}/customers/${googleCustomerId}:uploadClickConversions`;
     const maxAttempts = getUploadMaxAttempts();
     const retryBaseMs = getUploadRetryBaseMs();
     let lastError = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        const accessToken = await getGoogleAccessToken();
+        const accessToken = await getGoogleAccessToken(account);
         const response = await axios.post(url, requestBody, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
             "developer-token": developerToken,
-            "login-customer-id": GOOGLE_LOGIN_CUSTOMER_ID,
+            "login-customer-id": loginCustomerId,
             "Content-Type": "application/json",
           },
           timeout: 30000,
@@ -431,6 +535,9 @@ async function uploadGoogleClickConversion(payload = {}) {
               error: "google_upload_partial_failure",
               message: "google upload partial failure",
               details: partialFailure,
+              accountKey,
+              googleCustomerId,
+              loginCustomerId,
               clickIdType: clickId.clickIdType,
               conversionActionId,
               conversionDateTime,
@@ -450,6 +557,9 @@ async function uploadGoogleClickConversion(payload = {}) {
         const result = {
           ok: true,
           uploaded: true,
+          accountKey,
+          googleCustomerId,
+          loginCustomerId,
           clickIdType: clickId.clickIdType,
           conversionActionId,
           conversionDateTime,
@@ -484,12 +594,14 @@ async function uploadGoogleClickConversion(payload = {}) {
 
         if (!retryable) {
           error.attempts = attempt;
+          error.accountKey = accountKey;
+          error.googleCustomerId = googleCustomerId;
           throw error;
         }
 
         const delayMs = retryBaseMs * Math.pow(2, attempt - 1);
         console.warn(
-          `[google-conversion] transient error on attempt ${attempt}/${maxAttempts}: ${error.message}; retrying in ${delayMs}ms`
+          `[google-conversion] ${accountKey} transient error on attempt ${attempt}/${maxAttempts}: ${error.message}; retrying in ${delayMs}ms`
         );
         await sleep(delayMs);
       }
@@ -497,6 +609,8 @@ async function uploadGoogleClickConversion(payload = {}) {
 
     if (lastError) {
       lastError.attempts = maxAttempts;
+      lastError.accountKey = accountKey;
+      lastError.googleCustomerId = googleCustomerId;
       throw lastError;
     }
     throw new Error("Google conversion upload failed with no attempts.");
@@ -512,6 +626,8 @@ async function uploadGoogleClickConversion(payload = {}) {
         },
       });
     }
+    error.accountKey = error.accountKey || accountKey;
+    error.googleCustomerId = error.googleCustomerId || googleCustomerId;
     throw error;
   }
 }
@@ -522,6 +638,8 @@ module.exports = {
   formatGoogleConversionSlackAlert,
   extractGoogleFailureSummary,
   resolveCallId,
+  resolveGoogleAdsAccount,
+  isMcc1,
   isTransientGoogleError,
 };
 
