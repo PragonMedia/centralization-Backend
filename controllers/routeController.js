@@ -688,6 +688,11 @@ exports.createRoute = async (req, res) => {
     phoneNumber,
     createdBy,
     platform,
+    trackingPlatform,
+    callgridOrganizationId,
+    callgridCampaignId,
+    callgridCampaignSourceId,
+    callgridMediaBuyerName,
   } = req.body;
 
   try {
@@ -740,6 +745,23 @@ exports.createRoute = async (req, res) => {
       createdBy: routeCreatedBy, // Use logged-in user's email
       platform,
     };
+
+    // Optional CallGrid lander fields
+    if (trackingPlatform) {
+      newRoute.trackingPlatform = trackingPlatform;
+    }
+    if (callgridOrganizationId) {
+      newRoute.callgridOrganizationId = callgridOrganizationId;
+    }
+    if (callgridCampaignId) {
+      newRoute.callgridCampaignId = callgridCampaignId;
+    }
+    if (callgridCampaignSourceId) {
+      newRoute.callgridCampaignSourceId = callgridCampaignSourceId;
+    }
+    if (callgridMediaBuyerName) {
+      newRoute.callgridMediaBuyerName = callgridMediaBuyerName;
+    }
 
     if (!domainDoc) {
       // Domain doesn't exist - return error since this endpoint is only for adding routes to existing domains
@@ -1438,6 +1460,12 @@ exports.getDomainRouteDetails = async (req, res) => {
         phoneNumber: matchedRoute.phoneNumber || null,
         createdBy: matchedRoute.createdBy || null,
         platform: matchedRoute.platform,
+        trackingPlatform: matchedRoute.trackingPlatform || null,
+        callgridOrganizationId: matchedRoute.callgridOrganizationId || null,
+        callgridCampaignId: matchedRoute.callgridCampaignId || null,
+        callgridCampaignSourceId:
+          matchedRoute.callgridCampaignSourceId || null,
+        callgridMediaBuyerName: matchedRoute.callgridMediaBuyerName || null,
         createdAt: matchedRoute.createdAt,
         updatedAt: matchedRoute.updatedAt,
       },

@@ -17,6 +17,16 @@ const routeSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  // CallGrid lander fields (optional — Ringba landers leave these unset)
+  trackingPlatform: {
+    type: String,
+    enum: ["ringba", "callgrid"],
+    required: false,
+  },
+  callgridOrganizationId: { type: String },
+  callgridCampaignId: { type: String },
+  callgridCampaignSourceId: { type: String },
+  callgridMediaBuyerName: { type: String },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
