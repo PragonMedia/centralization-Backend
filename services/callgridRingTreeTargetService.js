@@ -102,7 +102,8 @@ function pick(src, ...keys) {
 function parseIngestParams(query = {}, body = {}) {
   const src = { ...query, ...(body && typeof body === "object" && !Array.isArray(body) ? body : {}) };
   const nestedCall = src.call && typeof src.call === "object" ? src.call : {};
-  const merged = { ...nestedCall, ...src };
+  const nestedTags = src.tags && typeof src.tags === "object" ? src.tags : {};
+  const merged = { ...nestedTags, ...nestedCall, ...src };
   return {
     event: pick(merged, "event", "type", "callStatus", "CallStatus"),
     callId: pick(merged, "callId", "call_id", "CallId", "id"),
@@ -115,6 +116,63 @@ function parseIngestParams(query = {}, body = {}) {
     routingGroupName: pick(merged, "routingGroupName", "RoutingGroupName"),
     profileKey: pick(merged, "profile", "vertical", "profileKey"),
   };
+}
+
+/**
+ * CallGrid webhooks often leave DestinationId / CallRevenue / RoutingGroupName blank
+ * even when GET /api/call/:id has them. Backfill from the Call API when needed.
+ */
+async function enrichParamsFromCallApi(params) {
+  const callId = params.callId;
+  if (!callId) return { params, enriched: false, reason: "no_call_id" };
+
+  const needsDestination = isBlankOrPlaceholder(params.destinationId);
+  const needsRevenue = isBlankOrPlaceholder(params.revenue);
+  const needsRouting = isBlankOrPlaceholder(params.routingGroupName);
+  const needsDestName = isBlankOrPlaceholder(params.destinationName);
+  const needsCaller = isBlankOrPlaceholder(params.callerPhone);
+  const needsCampaign = isBlankOrPlaceholder(params.campaignId);
+
+  if (!needsDestination && !needsRevenue && !needsRouting && !needsDestName && !needsCaller && !needsCampaign) {
+    return { params, enriched: false, reason: "already_complete" };
+  }
+
+  try {
+    const call = await callgridGet(`/api/call/${encodeURIComponent(callId)}`);
+    const tags = call?.tags && typeof call.tags === "object" ? call.tags : {};
+    const fromApi = {
+      destinationId: pick(tags, "DestinationId", "destinationId"),
+      destinationName: pick(tags, "DestinationName", "destinationName"),
+      callerPhone: pick(tags, "CallerId", "InboundNumber", "callerPhone"),
+      revenue: pick(tags, "CallRevenue", "CallPayout", "revenue", "payout"),
+      campaignId: pick(tags, "CampaignId", "campaignId"),
+      campaignName: pick(tags, "CampaignName", "campaignName"),
+      routingGroupName: pick(tags, "RoutingGroupName", "routingGroupName"),
+      callStatus: pick(tags, "CallStatus", "callStatus"),
+    };
+
+    const next = { ...params };
+    if (needsDestination && fromApi.destinationId) next.destinationId = fromApi.destinationId;
+    if (needsDestName && fromApi.destinationName) next.destinationName = fromApi.destinationName;
+    if (needsCaller && fromApi.callerPhone) next.callerPhone = fromApi.callerPhone;
+    if (needsRevenue && fromApi.revenue) next.revenue = fromApi.revenue;
+    if (needsCampaign && fromApi.campaignId) next.campaignId = fromApi.campaignId;
+    if (isBlankOrPlaceholder(next.campaignName) && fromApi.campaignName) {
+      next.campaignName = fromApi.campaignName;
+    }
+    if (needsRouting && fromApi.routingGroupName) next.routingGroupName = fromApi.routingGroupName;
+
+    return {
+      params: next,
+      enriched: true,
+      reason: "call_api",
+      callStatus: fromApi.callStatus || null,
+      fromApi,
+    };
+  } catch (err) {
+    console.warn("[callgrid-ring-tree] call API enrich failed:", callId, err.message);
+    return { params, enriched: false, reason: "api_error", error: err.message };
+  }
 }
 
 function asArray(payload) {
@@ -707,12 +765,42 @@ function webhookSecretOk(query, body, headers) {
   return String(provided).trim() === CFG.WEBHOOK_SECRET;
 }
 
+function summarizeIncomingPayload(query, body) {
+  const q = query && typeof query === "object" ? query : {};
+  const b = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  return {
+    queryKeys: Object.keys(q),
+    bodyKeys: Object.keys(b),
+    body: b,
+    query: q,
+  };
+}
+
 async function handleWebhookIngest(query, body, headers = {}) {
   if (!webhookSecretOk(query, body, headers)) {
     return { ok: false, status: "unauthorized", message: "Invalid webhook secret" };
   }
 
-  const params = parseIngestParams(query, body);
+  const raw = summarizeIncomingPayload(query, body);
+  // Temporary: log full inbound payload so we can fix CallGrid tag mapping.
+  console.log("[callgrid-ring-tree] raw webhook payload", JSON.stringify(raw));
+
+  let params = parseIngestParams(query, body);
+  const enrich = await enrichParamsFromCallApi(params);
+  params = enrich.params;
+  if (enrich.enriched) {
+    console.log(
+      "[callgrid-ring-tree] enriched from call API",
+      JSON.stringify({
+        callId: params.callId,
+        destinationId: params.destinationId,
+        destinationName: params.destinationName,
+        revenue: params.revenue,
+        routingGroupName: params.routingGroupName,
+        callStatus: enrich.callStatus,
+      })
+    );
+  }
   const profileKey =
     params.profileKey ||
     CFG.resolveProfileKeyFromCampaign(params.campaignId, params.campaignName) ||
@@ -754,6 +842,20 @@ async function handleWebhookIngest(query, body, headers = {}) {
     revenue: parseRevenue(params.revenue),
     batchSize: ingested.result.batchSize || null,
     rpc: ingested.result.rpc ?? null,
+    // Keep a copy of what CallGrid actually sent (for tag debugging).
+    rawBodyKeys: raw.bodyKeys,
+    rawBody: raw.body,
+    enrichedFromApi: Boolean(enrich.enriched),
+    enrichReason: enrich.reason || null,
+    parsed: {
+      destinationId: params.destinationId || null,
+      destinationName: params.destinationName || null,
+      callerPhone: params.callerPhone || null,
+      revenue: params.revenue || null,
+      campaignId: params.campaignId || null,
+      campaignName: params.campaignName || null,
+      routingGroupName: params.routingGroupName || null,
+    },
   });
 
   if (ingested.shouldEval && ingested.evalPayload) {
