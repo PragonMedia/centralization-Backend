@@ -2,6 +2,7 @@ const express = require("express");
 const googleConversionController = require("../controllers/googleConversionController");
 const dynamicRingTreeTargetController = require("../controllers/dynamicRingTreeTargetController");
 const ringbaFakeTargetPingController = require("../controllers/ringbaFakeTargetPingController");
+const callgridRingTreeTargetController = require("../controllers/callgridRingTreeTargetController");
 
 const router = express.Router();
 
@@ -36,6 +37,11 @@ router.post(
   "/ringba/fake-target-ping",
   ringbaFakeTargetPingController.handleFakeTargetPing
 );
+
+router.get("/callgrid/tier-rpc", callgridRingTreeTargetController.handleWebhook);
+router.post("/callgrid/tier-rpc", callgridRingTreeTargetController.handleWebhook);
+router.get("/callgrid/tier-rpc/medicare", callgridRingTreeTargetController.handleWebhook);
+router.post("/callgrid/tier-rpc/medicare", callgridRingTreeTargetController.handleWebhook);
 
 module.exports = router;
 

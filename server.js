@@ -18,6 +18,7 @@ const {
 const {
   startArchivedDomainPurgeScheduler,
 } = require("./services/archivedDomainPurgeScheduler");
+const { runStartupDiscover } = require("./services/callgridRingTreeTargetService");
 
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
@@ -45,4 +46,5 @@ mongoose
 // 🟢 Start listening for requests
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server is running on http://0.0.0.0:${PORT}`);
+  runStartupDiscover();
 });

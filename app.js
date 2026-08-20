@@ -25,6 +25,7 @@ const redtrackRouter = require("./routes/redtrackRoutes");
 const webhookRouter = require("./routes/webhookRoutes");
 const ringbaFakeTargetPingRouter = require("./routes/ringbaFakeTargetPingRoutes");
 const callgridLanderRouter = require("./routes/callgridLanderRoutes");
+const callgridRingTreeTargetRouter = require("./routes/callgridRingTreeTargetRoutes");
 const { ringbaBodyParser } = require("./middleware/ringbaBodyParser");
 
 const app = express();
@@ -89,7 +90,8 @@ const limiter = rateLimit({
       req.path === "/api/v1/domain-route-details" ||
       req.path.startsWith("/api/v1/accounting") ||
       req.path.startsWith("/ringba") ||
-      req.path.startsWith("/webhooks/ringba")
+      req.path.startsWith("/webhooks/ringba") ||
+      req.path.startsWith("/webhooks/callgrid")
     );
   },
 });
@@ -219,6 +221,7 @@ app.use("/api/v1/ring-tree-target", dynamicRingTreeTargetRouter);
 app.use("/api/v1/redtrack", redtrackRouter);
 app.use("/api/v1/ringba-fake-target-pings", ringbaFakeTargetPingRouter);
 app.use("/api/v1/callgrid", callgridLanderRouter);
+app.use("/api/v1/callgrid-ring-tree", callgridRingTreeTargetRouter);
 app.use("/api/v1", routeRouter); // ✅ example endpoint: POST /routes
 app.use("/webhooks", webhookRouter);
 

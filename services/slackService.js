@@ -3,6 +3,8 @@ const axios = require("axios");
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 const DYNAMIC_RING_TREE_SLACK_WEBHOOK_URL =
   process.env.DYNAMIC_RING_TREE_SLACK_WEBHOOK_URL;
+const CALLGRID_RING_TREE_SLACK_WEBHOOK_URL =
+  process.env.CALLGRID_RING_TREE_SLACK_WEBHOOK_URL;
 
 /**
  * Send a message to Slack
@@ -38,7 +40,18 @@ async function sendRingTreeSlackMessage(message) {
   });
 }
 
+/** CallGrid tier moves — dedicated webhook when set, else Ringba ring-tree, else default. */
+async function sendCallGridRingTreeSlackMessage(message) {
+  return sendSlackMessage(message, {
+    webhookUrl:
+      CALLGRID_RING_TREE_SLACK_WEBHOOK_URL ||
+      DYNAMIC_RING_TREE_SLACK_WEBHOOK_URL ||
+      SLACK_WEBHOOK_URL,
+  });
+}
+
 module.exports = {
   sendSlackMessage,
   sendRingTreeSlackMessage,
+  sendCallGridRingTreeSlackMessage,
 };
