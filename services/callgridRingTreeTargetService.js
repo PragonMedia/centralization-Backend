@@ -75,6 +75,8 @@ function isBlankOrPlaceholder(value) {
   if (["-no value-", "no value", "null", "undefined", "none", "n/a", "na"].includes(lower)) {
     return true;
   }
+  // Unresolved CallGrid tokens: [[tag:X]], [[destinationId]], {{x}}, [x]
+  if (/^\[\[[^\]]+\]\]$/.test(s)) return true;
   if (/^\[[^\]]+\]$/.test(s) || /^\{\{[^}]+\}\}$/.test(s)) return true;
   return false;
 }
