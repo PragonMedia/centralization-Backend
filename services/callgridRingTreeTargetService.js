@@ -109,18 +109,20 @@ function parseIngestParams(query = {}, body = {}) {
     callId: pick(merged, "callId", "call_id", "CallId", "id"),
     destinationId: pick(merged, "destinationId", "destination_id", "DestinationId", "destination.id"),
     destinationName: pick(merged, "destinationName", "destination_name", "DestinationName", "destination.name"),
-    callerPhone: pick(merged, "callerPhone", "caller_phone", "CallerId", "callerId", "ani", "phone", "InboundNumber"),
+    callerPhone: pick(merged, "callerPhone", "caller_phone", "CallerId", "callerId", "ani", "phone", "InboundNumber", "from"),
     revenue: pick(merged, "revenue", "CallRevenue", "callRevenue", "payout", "CallPayout", "conversionAmount"),
     campaignId: pick(merged, "campaignId", "campaign_id", "CampaignId", "campaign.id"),
     campaignName: pick(merged, "campaignName", "campaign_name", "CampaignName"),
     routingGroupName: pick(merged, "routingGroupName", "RoutingGroupName"),
     profileKey: pick(merged, "profile", "vertical", "profileKey"),
+    callStatus: pick(merged, "callStatus", "CallStatus", "status"),
   };
 }
 
 /**
  * CallGrid webhooks often leave DestinationId / CallRevenue / RoutingGroupName blank
  * even when GET /api/call/:id has them. Backfill from the Call API when needed.
+ * Call records are often not indexed yet at webhook fire time → retry briefly.
  */
 async function enrichParamsFromCallApi(params) {
   const callId = params.callId;
@@ -137,42 +139,78 @@ async function enrichParamsFromCallApi(params) {
     return { params, enriched: false, reason: "already_complete" };
   }
 
-  try {
-    const call = await callgridGet(`/api/call/${encodeURIComponent(callId)}`);
-    const tags = call?.tags && typeof call.tags === "object" ? call.tags : {};
-    const fromApi = {
-      destinationId: pick(tags, "DestinationId", "destinationId"),
-      destinationName: pick(tags, "DestinationName", "destinationName"),
-      callerPhone: pick(tags, "CallerId", "InboundNumber", "callerPhone"),
-      revenue: pick(tags, "CallRevenue", "CallPayout", "revenue", "payout"),
-      campaignId: pick(tags, "CampaignId", "campaignId"),
-      campaignName: pick(tags, "CampaignName", "campaignName"),
-      routingGroupName: pick(tags, "RoutingGroupName", "routingGroupName"),
-      callStatus: pick(tags, "CallStatus", "callStatus"),
-    };
+  const delaysMs = [0, 1500, 3000, 5000];
+  let lastError = null;
 
-    const next = { ...params };
-    if (needsDestination && fromApi.destinationId) next.destinationId = fromApi.destinationId;
-    if (needsDestName && fromApi.destinationName) next.destinationName = fromApi.destinationName;
-    if (needsCaller && fromApi.callerPhone) next.callerPhone = fromApi.callerPhone;
-    if (needsRevenue && fromApi.revenue) next.revenue = fromApi.revenue;
-    if (needsCampaign && fromApi.campaignId) next.campaignId = fromApi.campaignId;
-    if (isBlankOrPlaceholder(next.campaignName) && fromApi.campaignName) {
-      next.campaignName = fromApi.campaignName;
+  for (let attempt = 0; attempt < delaysMs.length; attempt += 1) {
+    if (delaysMs[attempt] > 0) {
+      await new Promise((r) => setTimeout(r, delaysMs[attempt]));
     }
-    if (needsRouting && fromApi.routingGroupName) next.routingGroupName = fromApi.routingGroupName;
+    try {
+      const call = await callgridGet(`/api/call/${encodeURIComponent(callId)}`);
+      const tags = call?.tags && typeof call.tags === "object" ? call.tags : {};
+      // Docs: destinationId/campaignId/from/callStatus are top-level; tags mirror many of them.
+      const fromApi = {
+        destinationId: pick(call, "destinationId") || pick(tags, "DestinationId", "destinationId"),
+        destinationName: pick(tags, "DestinationName", "destinationName"),
+        callerPhone:
+          pick(call, "from") || pick(tags, "CallerId", "InboundNumber", "callerPhone"),
+        revenue: pick(tags, "CallRevenue", "CallPayout", "revenue", "payout") || pick(call, "revenue", "payout"),
+        campaignId: pick(call, "campaignId") || pick(tags, "CampaignId", "campaignId"),
+        campaignName: pick(tags, "CampaignName", "campaignName"),
+        routingGroupName: pick(tags, "RoutingGroupName", "routingGroupName"),
+        callStatus: pick(call, "callStatus") || pick(tags, "CallStatus", "callStatus"),
+      };
 
-    return {
-      params: next,
-      enriched: true,
-      reason: "call_api",
-      callStatus: fromApi.callStatus || null,
-      fromApi,
-    };
-  } catch (err) {
-    console.warn("[callgrid-ring-tree] call API enrich failed:", callId, err.message);
-    return { params, enriched: false, reason: "api_error", error: err.message };
+      const next = { ...params };
+      if (needsDestination && fromApi.destinationId) next.destinationId = fromApi.destinationId;
+      if (needsDestName && fromApi.destinationName) next.destinationName = fromApi.destinationName;
+      if (needsCaller && fromApi.callerPhone) next.callerPhone = fromApi.callerPhone;
+      if (needsRevenue && !isBlankOrPlaceholder(fromApi.revenue)) next.revenue = fromApi.revenue;
+      if (needsCampaign && fromApi.campaignId) next.campaignId = fromApi.campaignId;
+      if (isBlankOrPlaceholder(next.campaignName) && fromApi.campaignName) {
+        next.campaignName = fromApi.campaignName;
+      }
+      if (needsRouting && fromApi.routingGroupName) next.routingGroupName = fromApi.routingGroupName;
+
+      const gotDestination = !isBlankOrPlaceholder(next.destinationId);
+      if (!gotDestination && needsDestination) {
+        // Call exists but destination not set yet — keep retrying.
+        lastError = new Error("destination_not_ready");
+        continue;
+      }
+
+      return {
+        params: next,
+        enriched: true,
+        reason: "call_api",
+        attempt: attempt + 1,
+        callStatus: fromApi.callStatus || null,
+        fromApi,
+      };
+    } catch (err) {
+      lastError = err;
+      const notFound =
+        err.status === 404 || /not found/i.test(String(err.message || ""));
+      if (!notFound) {
+        console.warn("[callgrid-ring-tree] call API enrich failed:", callId, err.message);
+        return { params, enriched: false, reason: "api_error", error: err.message };
+      }
+      // retry on Call not found
+    }
   }
+
+  console.warn(
+    "[callgrid-ring-tree] call API enrich failed:",
+    callId,
+    lastError?.message || "exhausted_retries"
+  );
+  return {
+    params,
+    enriched: false,
+    reason: "api_error",
+    error: lastError?.message || "exhausted_retries",
+  };
 }
 
 function asArray(payload) {
