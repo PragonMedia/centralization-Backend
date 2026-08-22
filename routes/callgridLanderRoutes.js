@@ -11,5 +11,6 @@ router.get(
   "/campaigns/:campaignId/media-buyers",
   callgridLanderController.listMediaBuyers,
 );
+router.get("/destinations", callgridLanderController.listDestinations);
 
 module.exports = router;

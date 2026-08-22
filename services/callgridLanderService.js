@@ -194,8 +194,71 @@ async function listMediaBuyersForCampaign(campaignId) {
   };
 }
 
+/**
+ * List all CallGrid destinations (paginated pull from GET /api/destination).
+ */
+async function listDestinations(options = {}) {
+  const limit = Math.min(100, Math.max(1, parseInt(options.limit, 10) || 100));
+  const maxPages = Math.min(200, Math.max(1, parseInt(options.maxPages, 10) || 200));
+  const destinations = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages && page <= maxPages) {
+    const payload = await callgridGet(
+      `/api/destination?page=${page}&limit=${limit}`,
+    );
+    const rows = asArray(payload);
+    for (const row of rows) {
+      if (!row?.id) continue;
+      destinations.push({
+        id: row.id,
+        name: row.name || null,
+        subid: row.subid || null,
+        buyerId: row.buyerId || null,
+        paused: Boolean(row.paused),
+        active: row.active !== false,
+        capped: Boolean(row.capped),
+        phoneType: row.phoneType || null,
+        phoneNumber: row.phoneNumber || null,
+        sipUri: row.sipUri || null,
+        revenueType: row.revenueType || null,
+        revenueAmount: row.revenueAmount ?? null,
+        billableType: row.billableType || null,
+        durationSeconds: row.durationSeconds ?? null,
+        timezone: row.timezone || null,
+        liveCalls: row.liveCalls ?? null,
+        dailyCalls: row.dailyCalls ?? null,
+        monthlyCalls: row.monthlyCalls ?? null,
+        createdAt: row.createdAt || null,
+        updatedAt: row.updatedAt || null,
+        ...(options.includeRaw ? { raw: row } : {}),
+      });
+    }
+    totalPages = parseInt(payload?.totalPages, 10) || page;
+    if (!rows.length) break;
+    page += 1;
+  }
+
+  destinations.sort((a, b) =>
+    String(a.name || a.id).localeCompare(String(b.name || b.id), undefined, {
+      sensitivity: "base",
+    }),
+  );
+
+  const orgPayload = await callgridGet("/api/organization");
+  return {
+    organizationId: resolveOrganizationId(orgPayload),
+    count: destinations.length,
+    pagesFetched: Math.min(page - 1, maxPages),
+    totalPages,
+    destinations,
+  };
+}
+
 module.exports = {
   listCampaigns,
   listMediaBuyersForCampaign,
+  listDestinations,
   getApiKey,
 };

@@ -42,3 +42,30 @@ exports.listMediaBuyers = async (req, res) => {
     });
   }
 };
+
+/**
+ * GET /api/v1/callgrid/destinations
+ * Optional query: includeRaw=1, limit=100, maxPages=50
+ */
+exports.listDestinations = async (req, res) => {
+  try {
+    const result = await callgridLanderService.listDestinations({
+      includeRaw:
+        String(req.query?.includeRaw || "").trim() === "1" ||
+        String(req.query?.includeRaw || "").toLowerCase() === "true",
+      limit: req.query?.limit,
+      maxPages: req.query?.maxPages,
+    });
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error("CallGrid listDestinations error:", error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      error: error.message || "Failed to list CallGrid destinations",
+      details: error.details || undefined,
+    });
+  }
+};
