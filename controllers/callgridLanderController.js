@@ -45,10 +45,17 @@ exports.listMediaBuyers = async (req, res) => {
 
 /**
  * GET /api/v1/callgrid/destinations
- * Optional query: includeRaw=1, limit=100, maxPages=50
+ * Default: names only.
+ * Optional: full=1 (or includeRaw=1) for full destination objects.
  */
 exports.listDestinations = async (req, res) => {
   try {
+    const full =
+      String(req.query?.full || "").trim() === "1" ||
+      String(req.query?.full || "").toLowerCase() === "true" ||
+      String(req.query?.includeRaw || "").trim() === "1" ||
+      String(req.query?.includeRaw || "").toLowerCase() === "true";
+
     const result = await callgridLanderService.listDestinations({
       includeRaw:
         String(req.query?.includeRaw || "").trim() === "1" ||
@@ -56,6 +63,19 @@ exports.listDestinations = async (req, res) => {
       limit: req.query?.limit,
       maxPages: req.query?.maxPages,
     });
+
+    if (!full) {
+      const names = (result.destinations || [])
+        .map((d) => d.name || d.id)
+        .filter(Boolean);
+      return res.status(200).json({
+        success: true,
+        organizationId: result.organizationId,
+        count: names.length,
+        names,
+      });
+    }
+
     return res.status(200).json({
       success: true,
       ...result,
