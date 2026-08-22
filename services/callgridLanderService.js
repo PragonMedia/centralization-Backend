@@ -195,49 +195,41 @@ async function listMediaBuyersForCampaign(campaignId) {
 }
 
 /**
- * List all CallGrid destinations (paginated pull from GET /api/destination).
+ * List all CallGrid destinations.
+ * IMPORTANT: do NOT send page=1 — CallGrid truncates paginated destination lists
+ * (page=1&limit=100 ≈ 113 rows). Omitting `page` returns the full set (~213).
  */
 async function listDestinations(options = {}) {
-  const limit = Math.min(100, Math.max(1, parseInt(options.limit, 10) || 100));
-  const maxPages = Math.min(200, Math.max(1, parseInt(options.maxPages, 10) || 200));
   const destinations = [];
-  let page = 1;
-  let totalPages = 1;
+  const seen = new Set();
 
-  while (page <= totalPages && page <= maxPages) {
-    const payload = await callgridGet(
-      `/api/destination?page=${page}&limit=${limit}`,
-    );
-    const rows = asArray(payload);
-    for (const row of rows) {
-      if (!row?.id) continue;
-      destinations.push({
-        id: row.id,
-        name: row.name || null,
-        subid: row.subid || null,
-        buyerId: row.buyerId || null,
-        paused: Boolean(row.paused),
-        active: row.active !== false,
-        capped: Boolean(row.capped),
-        phoneType: row.phoneType || null,
-        phoneNumber: row.phoneNumber || null,
-        sipUri: row.sipUri || null,
-        revenueType: row.revenueType || null,
-        revenueAmount: row.revenueAmount ?? null,
-        billableType: row.billableType || null,
-        durationSeconds: row.durationSeconds ?? null,
-        timezone: row.timezone || null,
-        liveCalls: row.liveCalls ?? null,
-        dailyCalls: row.dailyCalls ?? null,
-        monthlyCalls: row.monthlyCalls ?? null,
-        createdAt: row.createdAt || null,
-        updatedAt: row.updatedAt || null,
-        ...(options.includeRaw ? { raw: row } : {}),
-      });
-    }
-    totalPages = parseInt(payload?.totalPages, 10) || page;
-    if (!rows.length) break;
-    page += 1;
+  const payload = await callgridGet("/api/destination");
+  for (const row of asArray(payload)) {
+    if (!row?.id || seen.has(row.id)) continue;
+    seen.add(row.id);
+    destinations.push({
+      id: row.id,
+      name: row.name || null,
+      subid: row.subid || null,
+      buyerId: row.buyerId || null,
+      paused: Boolean(row.paused),
+      active: row.active !== false,
+      capped: Boolean(row.capped),
+      phoneType: row.phoneType || null,
+      phoneNumber: row.phoneNumber || null,
+      sipUri: row.sipUri || null,
+      revenueType: row.revenueType || null,
+      revenueAmount: row.revenueAmount ?? null,
+      billableType: row.billableType || null,
+      durationSeconds: row.durationSeconds ?? null,
+      timezone: row.timezone || null,
+      liveCalls: row.liveCalls ?? null,
+      dailyCalls: row.dailyCalls ?? null,
+      monthlyCalls: row.monthlyCalls ?? null,
+      createdAt: row.createdAt || null,
+      updatedAt: row.updatedAt || null,
+      ...(options.includeRaw ? { raw: row } : {}),
+    });
   }
 
   destinations.sort((a, b) =>
@@ -250,8 +242,6 @@ async function listDestinations(options = {}) {
   return {
     organizationId: resolveOrganizationId(orgPayload),
     count: destinations.length,
-    pagesFetched: Math.min(page - 1, maxPages),
-    totalPages,
     destinations,
   };
 }

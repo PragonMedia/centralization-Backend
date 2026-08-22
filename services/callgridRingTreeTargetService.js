@@ -278,16 +278,11 @@ async function verifyAuth() {
 }
 
 async function fetchDestinationNameMap() {
+  // Omit page= — CallGrid truncates paginated /api/destination results.
   const byId = new Map();
-  let page = 1;
-  let totalPages = 1;
-  while (page <= totalPages && page <= 20) {
-    const payload = await callgridGet(`/api/destination?page=${page}&limit=100`);
-    for (const row of asArray(payload)) {
-      if (row?.id) byId.set(row.id, row.name || row.id);
-    }
-    totalPages = parseInt(payload?.totalPages, 10) || 1;
-    page += 1;
+  const payload = await callgridGet("/api/destination");
+  for (const row of asArray(payload)) {
+    if (row?.id) byId.set(row.id, row.name || row.id);
   }
   return byId;
 }
