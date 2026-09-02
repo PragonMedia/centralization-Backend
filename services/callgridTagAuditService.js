@@ -107,10 +107,17 @@ function getRequiredFields(payload) {
   return [...DEFAULT_REQUIRED_FIELDS];
 }
 
+/** Slack-facing labels (internal field keys may differ). */
+function displayFieldName(field) {
+  if (field === "adaccount") return "account";
+  return field;
+}
+
 function formatMissingList(fields) {
-  if (fields.length === 1) return fields[0];
-  if (fields.length === 2) return `${fields[0]} and ${fields[1]}`;
-  return `${fields.slice(0, -1).join(", ")} and ${fields[fields.length - 1]}`;
+  const labels = fields.map(displayFieldName);
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
 
 function buildSlackMessage({ phoneNumber, mb, missing }) {
