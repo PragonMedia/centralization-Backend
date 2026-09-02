@@ -7,6 +7,9 @@ const {
   startAccountingRevenueScheduler,
 } = require("./services/accountingRevenueScheduler");
 const {
+  startCallgridAccountingRevenueScheduler,
+} = require("./services/callgridAccountingRevenueScheduler");
+const {
   startStatePerformanceScheduler,
 } = require("./services/statePerformanceScheduler");
 const {
@@ -15,6 +18,9 @@ const {
 const {
   startDynamicRingTreeTargetScheduler,
 } = require("./services/dynamicRingTreeTargetScheduler");
+const {
+  startCallgridRingTreeTargetScheduler,
+} = require("./services/callgridRingTreeTargetScheduler");
 const {
   startArchivedDomainPurgeScheduler,
 } = require("./services/archivedDomainPurgeScheduler");
@@ -36,9 +42,11 @@ mongoose
   .then(() => {
     console.log("✅ Connected to MongoDB Atlas");
     startAccountingRevenueScheduler();
+    startCallgridAccountingRevenueScheduler();
     startStatePerformanceScheduler();
     startRokuAdSpendScheduler();
     startDynamicRingTreeTargetScheduler();
+    startCallgridRingTreeTargetScheduler();
     startArchivedDomainPurgeScheduler();
   })
   .catch((err) => console.error("❌ MongoDB connection error:", err));

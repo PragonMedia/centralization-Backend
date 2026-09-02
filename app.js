@@ -25,6 +25,7 @@ const redtrackRouter = require("./routes/redtrackRoutes");
 const webhookRouter = require("./routes/webhookRoutes");
 const ringbaFakeTargetPingRouter = require("./routes/ringbaFakeTargetPingRoutes");
 const callgridLanderRouter = require("./routes/callgridLanderRoutes");
+const callgridAccountingRouter = require("./routes/callgridAccountingRoutes");
 const callgridRingTreeTargetRouter = require("./routes/callgridRingTreeTargetRoutes");
 const { ringbaBodyParser } = require("./middleware/ringbaBodyParser");
 
@@ -89,6 +90,7 @@ const limiter = rateLimit({
     return (
       req.path === "/api/v1/domain-route-details" ||
       req.path.startsWith("/api/v1/accounting") ||
+      req.path.startsWith("/api/v1/callgrid-accounting") ||
       req.path.startsWith("/ringba") ||
       req.path.startsWith("/webhooks/ringba") ||
       req.path.startsWith("/webhooks/callgrid")
@@ -221,9 +223,12 @@ app.use("/api/v1/ring-tree-target", dynamicRingTreeTargetRouter);
 app.use("/api/v1/redtrack", redtrackRouter);
 app.use("/api/v1/ringba-fake-target-pings", ringbaFakeTargetPingRouter);
 app.use("/api/v1/callgrid", callgridLanderRouter);
+app.use("/api/v1/callgrid-accounting", callgridAccountingRouter);
 app.use("/api/v1/callgrid-ring-tree", callgridRingTreeTargetRouter);
 app.use("/api/v1", routeRouter); // ✅ example endpoint: POST /routes
 app.use("/webhooks", webhookRouter);
+// Same CallGrid pixels under /api so nginx (admin / IP) can proxy them over HTTPS
+app.use("/api/webhooks", webhookRouter);
 
 // 11. Global error handling middleware (must be last)
 app.use((err, req, res, next) => {
