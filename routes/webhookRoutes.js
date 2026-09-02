@@ -3,6 +3,7 @@ const googleConversionController = require("../controllers/googleConversionContr
 const dynamicRingTreeTargetController = require("../controllers/dynamicRingTreeTargetController");
 const ringbaFakeTargetPingController = require("../controllers/ringbaFakeTargetPingController");
 const callgridRingTreeTargetController = require("../controllers/callgridRingTreeTargetController");
+const callgridTagAuditController = require("../controllers/callgridTagAuditController");
 
 const router = express.Router();
 
@@ -42,6 +43,12 @@ router.get("/callgrid/tier-rpc", callgridRingTreeTargetController.handleWebhook)
 router.post("/callgrid/tier-rpc", callgridRingTreeTargetController.handleWebhook);
 router.get("/callgrid/tier-rpc/medicare", callgridRingTreeTargetController.handleWebhook);
 router.post("/callgrid/tier-rpc/medicare", callgridRingTreeTargetController.handleWebhook);
+router.get("/callgrid/tier-rpc/fe", callgridRingTreeTargetController.handleWebhook);
+router.post("/callgrid/tier-rpc/fe", callgridRingTreeTargetController.handleWebhook);
+
+// CallGrid tag completeness pixel — Slack when angle/channel/qualified/adaccount/key missing
+router.post("/callgrid/tag-audit", callgridTagAuditController.handleTagAudit);
+router.get("/callgrid/tag-audit", callgridTagAuditController.handleTagAudit);
 
 module.exports = router;
 
