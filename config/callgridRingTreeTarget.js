@@ -36,27 +36,36 @@ const FE_HYSTERESIS = {
   demoteFromTier2: 14,
 };
 
-/** Default profiles — Medicare live; FE/ACA disabled until campaign IDs are set. */
+/** Default profiles — Medicare live writes; FE dry-run; ACA opt-in. */
 const DEFAULT_PROFILES = {
   medicare: {
     key: "medicare",
     label: "Medicare",
     enabled: envTrim("CALLGRID_RING_TREE_MEDICARE_ENABLED", "true").toLowerCase() !== "false",
     campaignId: envTrim("CALLGRID_RING_TREE_MEDICARE_CAMPAIGN_ID", "cmrwhonxu04ak07jzvllrcf4d"),
-    planId: envTrim("CALLGRID_RING_TREE_MEDICARE_PLAN_ID", "plan-1784829558366"),
+    planId: envTrim("CALLGRID_RING_TREE_MEDICARE_PLAN_ID", "plan-1787681293268"),
     campaignName: "Medicare",
     targetNamePrefix: "Medi -",
+    /** false = live CallGrid PATCH moves. */
+    dryRun: envTrim("CALLGRID_RING_TREE_MEDICARE_DRY_RUN", "false").toLowerCase() !== "false",
     rpcRules: MEDICARE_RPC_RULES,
     hysteresis: MEDICARE_HYSTERESIS,
   },
   fe: {
     key: "fe",
     label: "Final Expense",
-    enabled: envTrim("CALLGRID_RING_TREE_FE_ENABLED", "false").toLowerCase() === "true",
-    campaignId: envTrim("CALLGRID_RING_TREE_FE_CAMPAIGN_ID", ""),
-    planId: envTrim("CALLGRID_RING_TREE_FE_PLAN_ID", ""),
+    enabled: envTrim("CALLGRID_RING_TREE_FE_ENABLED", "true").toLowerCase() !== "false",
+    campaignId: envTrim(
+      "CALLGRID_RING_TREE_FE_CAMPAIGN_ID",
+      "cmt4ixea7006s06jv02u1wn6w"
+    ),
+    planId: envTrim("CALLGRID_RING_TREE_FE_PLAN_ID", "plan-1784829558366"),
     campaignName: "Final Expense",
     targetNamePrefix: "FE -",
+    /** Managed tiers only — Sales Pulse is excluded from automation. */
+    tierGroupNames: ["FE - T1", "FE - T2", "FE - T3"],
+    /** Keep FE dry-run until explicitly enabled via CALLGRID_RING_TREE_FE_DRY_RUN=false. */
+    dryRun: envTrim("CALLGRID_RING_TREE_FE_DRY_RUN", "false").toLowerCase() !== "false",
     rpcRules: FE_RPC_RULES,
     hysteresis: FE_HYSTERESIS,
   },
@@ -68,6 +77,7 @@ const DEFAULT_PROFILES = {
     planId: envTrim("CALLGRID_RING_TREE_ACA_PLAN_ID", ""),
     campaignName: "ACA",
     targetNamePrefix: "ACA -",
+    dryRun: envTrim("CALLGRID_RING_TREE_ACA_DRY_RUN", "true").toLowerCase() !== "false",
     rpcRules: FE_RPC_RULES,
     hysteresis: FE_HYSTERESIS,
   },
@@ -130,8 +140,18 @@ function getProfileHysteresis(profile) {
   return profile?.hysteresis || MEDICARE_HYSTERESIS;
 }
 
+/** Per-profile dry-run when set; otherwise global CALLGRID_RING_TREE_DRY_RUN. */
+function isProfileDryRun(profile) {
+  if (profile && typeof profile.dryRun === "boolean") return profile.dryRun;
+  return module.exports.DRY_RUN;
+}
+
 module.exports = {
-  BATCH_SIZE: Math.max(1, parseInt(envTrim("CALLGRID_RING_TREE_BATCH_SIZE", "5"), 10) || 5),
+  // Match Ringba dynamicRingTreeTarget default (BATCH_SIZE=20).
+  BATCH_SIZE: Math.max(
+    1,
+    parseInt(envTrim("CALLGRID_RING_TREE_BATCH_SIZE", "20"), 10) || 20
+  ),
   MOVE_COOLDOWN_MS: Math.max(
     0,
     parseInt(envTrim("CALLGRID_RING_TREE_MOVE_COOLDOWN_MS", "1800000"), 10) || 1800000
@@ -139,6 +159,27 @@ module.exports = {
   DRY_RUN: envTrim("CALLGRID_RING_TREE_DRY_RUN", "true").toLowerCase() !== "false",
   STARTUP_DISCOVER:
     envTrim("CALLGRID_RING_TREE_STARTUP_DISCOVER", "true").toLowerCase() !== "false",
+  /**
+   * Skip demotion when a completed batch has RPC=0 and every call revenue is 0
+   * (parity with Ringba SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC).
+   */
+  SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC:
+    envTrim("CALLGRID_RING_TREE_SKIP_DEMOTION_ON_ZERO_RPC", "true").toLowerCase() !==
+    "false",
+  /** Clear open RPC batches daily so partial counts do not carry overnight (Ringba parity). */
+  DAILY_BATCH_RESET_ENABLED:
+    envTrim("CALLGRID_RING_TREE_DAILY_BATCH_RESET", "true").toLowerCase() !== "false",
+  DAILY_BATCH_RESET_TIMEZONE: envTrim(
+    "CALLGRID_RING_TREE_DAILY_BATCH_RESET_TIMEZONE",
+    "America/New_York"
+  ),
+  DAILY_BATCH_RESET_HOUR: Math.min(
+    23,
+    Math.max(
+      0,
+      parseInt(envTrim("CALLGRID_RING_TREE_DAILY_BATCH_RESET_HOUR", "1"), 10) || 1
+    )
+  ),
   WEBHOOK_SECRET: envTrim("CALLGRID_RING_TREE_WEBHOOK_SECRET"),
   SLACK_WEBHOOK_URL:
     envTrim("CALLGRID_RING_TREE_SLACK_WEBHOOK_URL") ||
@@ -157,6 +198,7 @@ module.exports = {
   resolveProfileKeyFromCampaign,
   getProfileRpcRules,
   getProfileHysteresis,
+  isProfileDryRun,
   // Legacy exports for medicare-only callers
   PROFILE_KEY: "medicare",
   CAMPAIGN_ID: DEFAULT_PROFILES.medicare.campaignId,

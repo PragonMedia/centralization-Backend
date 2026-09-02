@@ -245,6 +245,35 @@ async function callgridGet(apiPath) {
   return json;
 }
 
+async function callgridPatch(apiPath, body) {
+  const apiKey = CFG.getApiKey();
+  if (!apiKey) {
+    const err = new Error("CALLGRID_API_KEY is not configured on the server.");
+    err.code = "missing_api_key";
+    throw err;
+  }
+  const url = `${CFG.API_BASE_URL}${apiPath.startsWith("/") ? apiPath : `/${apiPath}`}`;
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body || {}),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    const err = new Error(
+      json?.message || json?.error || `CallGrid HTTP ${response.status} PATCH ${apiPath}`
+    );
+    err.status = response.status;
+    err.details = json;
+    throw err;
+  }
+  return json;
+}
+
 async function verifyAuth() {
   const apiKey = CFG.getApiKey();
   if (!apiKey) {
@@ -300,9 +329,25 @@ function findPlan(campaign, profile) {
   return plans[0] || null;
 }
 
+/**
+ * Groups the ring-tree may move destinations between.
+ * When profile.tierGroupNames is set (FE: T1/T2/T3), Sales Pulse and any other
+ * groups are excluded from tierOrder and automation.
+ */
+function getManagedGroups(plan, profile) {
+  const groups = plan?.groups || [];
+  const names = profile?.tierGroupNames;
+  if (Array.isArray(names) && names.length) {
+    const want = new Set(names);
+    return groups.filter((g) => want.has(g.name));
+  }
+  return groups;
+}
+
 function buildTierSnapshot(campaign, profile, destNameById) {
   const plan = findPlan(campaign, profile);
-  const groups = (plan?.groups || []).map((g) => {
+  const managed = getManagedGroups(plan, profile);
+  const groups = managed.map((g) => {
     const destIds = (g.destinations || [])
       .map((d) => (typeof d === "string" ? d : d?.id))
       .filter(Boolean);
@@ -332,6 +377,7 @@ function buildTierSnapshot(campaign, profile, destNameById) {
     groupMode: Boolean(campaign.groupMode),
     routing: campaign.routing || null,
     plan: plan ? { id: plan.id, name: plan.name, groupCount: groups.length } : null,
+    tierGroupNames: Array.isArray(profile.tierGroupNames) ? profile.tierGroupNames : null,
     tiers: groups,
     totalDestinations: groups.reduce((sum, g) => sum + g.destinationCount, 0),
   };
@@ -536,9 +582,130 @@ function buildDryRunMovePlan(plan, destinationId, fromGroupName, toGroupName, ca
   return {
     ok: true,
     writePath: `PATCH /api/campaign/${campaignId}`,
-    writeImplemented: false,
+    writeImplemented: true,
     from: { id: from.id, name: from.name },
     to: { id: to.id, name: to.name },
+    destinationId,
+  };
+}
+
+function groupHasDestination(group, destinationId) {
+  const dests = Array.isArray(group?.destinations) ? group.destinations : [];
+  const weights = Array.isArray(group?.weights) ? group.weights : [];
+  const inDests = dests.some((d) => (typeof d === "string" ? d : d?.id) === destinationId);
+  const inWeights = weights.some((w) => w?.destinationId === destinationId);
+  return inDests || inWeights;
+}
+
+function removeDestinationFromGroup(group, destinationId) {
+  const dests = Array.isArray(group.destinations) ? group.destinations : [];
+  group.destinations = dests.filter((d) => (typeof d === "string" ? d : d?.id) !== destinationId);
+  const weights = Array.isArray(group.weights) ? group.weights : [];
+  group.weights = weights.filter((w) => w?.destinationId !== destinationId);
+}
+
+function addDestinationToGroup(group, destinationId, weight = 1, priority = 1) {
+  const dests = Array.isArray(group.destinations) ? [...group.destinations] : [];
+  const already = dests.some((d) => (typeof d === "string" ? d : d?.id) === destinationId);
+  if (!already) dests.push(destinationId);
+  group.destinations = dests;
+
+  const weights = Array.isArray(group.weights) ? [...group.weights] : [];
+  const idx = weights.findIndex((w) => w?.destinationId === destinationId);
+  if (idx >= 0) {
+    weights[idx] = {
+      ...weights[idx],
+      weight: weights[idx].weight ?? weight,
+      priority: weights[idx].priority ?? priority,
+      destinationId,
+    };
+  } else {
+    weights.push({ destinationId, weight, priority });
+  }
+  group.weights = weights;
+}
+
+/**
+ * Move destination between tiers across every plan that has matching T1/T2/... groups.
+ * Keeps A/B Medicare plans (Best + Test) in sync by tier number.
+ */
+function buildMovedRoutingGroups(campaign, destinationId, fromGroupName, toGroupName, weight, priority) {
+  const fromTier = shortTierLabel(fromGroupName);
+  const toTier = shortTierLabel(toGroupName);
+  const routingGroups = JSON.parse(JSON.stringify(campaign.routingGroups || { plans: [] }));
+  const planResults = [];
+
+  for (const plan of routingGroups.plans || []) {
+    const fromGroup = (plan.groups || []).find((g) => shortTierLabel(g.name) === fromTier);
+    const toGroup = (plan.groups || []).find((g) => shortTierLabel(g.name) === toTier);
+    if (!fromGroup || !toGroup) {
+      planResults.push({ planId: plan.id, planName: plan.name, changed: false, reason: "tier_groups_missing" });
+      continue;
+    }
+
+    const currentlyHere =
+      groupHasDestination(fromGroup, destinationId) ||
+      (plan.groups || []).some((g) => groupHasDestination(g, destinationId));
+
+    if (!currentlyHere) {
+      planResults.push({ planId: plan.id, planName: plan.name, changed: false, reason: "destination_not_in_plan" });
+      continue;
+    }
+
+    for (const g of plan.groups || []) {
+      removeDestinationFromGroup(g, destinationId);
+    }
+    addDestinationToGroup(toGroup, destinationId, weight, priority);
+    planResults.push({
+      planId: plan.id,
+      planName: plan.name,
+      changed: true,
+      from: fromGroup.name,
+      to: toGroup.name,
+    });
+  }
+
+  return {
+    routingGroups,
+    planResults,
+    changedPlans: planResults.filter((p) => p.changed).length,
+  };
+}
+
+async function applyLiveDestinationMove({
+  campaign,
+  destinationId,
+  fromGroupName,
+  toGroupName,
+  weight = 1,
+  priority = 1,
+}) {
+  const built = buildMovedRoutingGroups(
+    campaign,
+    destinationId,
+    fromGroupName,
+    toGroupName,
+    weight,
+    priority
+  );
+  if (!built.changedPlans) {
+    const err = new Error("destination not found in any plan tier groups for this move");
+    err.code = "move_noop";
+    err.details = built.planResults;
+    throw err;
+  }
+
+  const patched = await callgridPatch(`/api/campaign/${encodeURIComponent(campaign.id)}`, {
+    routingGroups: built.routingGroups,
+    updatedAt: campaign.updatedAt,
+  });
+
+  return {
+    ok: true,
+    writePath: `PATCH /api/campaign/${campaign.id}`,
+    changedPlans: built.changedPlans,
+    planResults: built.planResults,
+    updatedAt: patched?.updatedAt || null,
   };
 }
 
@@ -576,7 +743,7 @@ function ingestCall(state, params, profileKey) {
         status: "ignored_no_destination",
         profileKey,
         message: "Completed call with no destination — skipped",
-        dryRun: CFG.DRY_RUN,
+        dryRun: CFG.isProfileDryRun(profile),
       },
     };
   }
@@ -607,7 +774,7 @@ function ingestCall(state, params, profileKey) {
         destinationId,
         destinationName: destState.destinationName,
         batchSize: destState.batch.length,
-        dryRun: CFG.DRY_RUN,
+        dryRun: CFG.isProfileDryRun(profile),
       },
     };
   }
@@ -623,7 +790,7 @@ function ingestCall(state, params, profileKey) {
         destinationId,
         destinationName: destState.destinationName,
         batchSize: destState.batch.length,
-        dryRun: CFG.DRY_RUN,
+        dryRun: CFG.isProfileDryRun(profile),
       },
     };
   }
@@ -648,7 +815,7 @@ function ingestCall(state, params, profileKey) {
         batchSize: destState.batch.length,
         batchNeeded: CFG.BATCH_SIZE,
         rpc: null,
-        dryRun: CFG.DRY_RUN,
+        dryRun: CFG.isProfileDryRun(profile),
       },
     };
   }
@@ -667,7 +834,7 @@ function ingestCall(state, params, profileKey) {
       destinationName: destState.destinationName,
       batchSize: CFG.BATCH_SIZE,
       rpc,
-      dryRun: CFG.DRY_RUN,
+      dryRun: CFG.isProfileDryRun(profile),
     },
     shouldEval: true,
     evalPayload: { profileKey, destinationId, destinationName: destState.destinationName, batch: batchCopy, rpc },
@@ -678,6 +845,11 @@ function isMoveCooldownActive(profileState, destinationId) {
   const last = profileState.lastMoveAt?.[destinationId];
   if (!last) return false;
   return Date.now() - new Date(last).getTime() < CFG.MOVE_COOLDOWN_MS;
+}
+
+function batchRevenueAllZero(batch) {
+  if (!Array.isArray(batch) || batch.length === 0) return true;
+  return batch.every((c) => parseRevenue(c?.revenue) === 0);
 }
 
 async function evaluateBatchMove({ profileKey, destinationId, destinationName, batch, rpc, state }) {
@@ -699,7 +871,8 @@ async function evaluateBatchMove({ profileKey, destinationId, destinationName, b
     return { action: "skipped", reason: "routing_plan_missing" };
   }
 
-  const tierOrder = (plan.groups || []).map((g) => g.name);
+  const managedGroups = getManagedGroups(plan, profile);
+  const tierOrder = managedGroups.map((g) => g.name);
   profile.tierNames = tierOrder;
 
   const located = locateDestinationInPlan(plan, destinationId);
@@ -715,12 +888,40 @@ async function evaluateBatchMove({ profileKey, destinationId, destinationName, b
     return { action: "skipped", reason: "destination_not_in_profile_tiers", rpc };
   }
 
+  if (!tierOrder.includes(located.groupName)) {
+    await appendEvent({
+      type: "eval_skipped",
+      reason: "destination_outside_managed_tiers",
+      profileKey,
+      destinationId,
+      destinationName,
+      currentTier: located.groupName,
+      managedTiers: tierOrder,
+      rpc,
+    });
+    console.log("[callgrid-ring-tree] skip — outside managed tiers", {
+      profileKey,
+      destinationId,
+      currentTier: located.groupName,
+      managedTiers: tierOrder,
+    });
+    return {
+      action: "skipped",
+      reason: "destination_outside_managed_tiers",
+      currentTier: located.groupName,
+      managedTiers: tierOrder,
+      rpc,
+    };
+  }
+
   const resolvedName = destinationName || (await lookupDestinationName(destinationId)) || destinationId;
   const currentTier = located.groupName;
   const rawTier = getRawTierFromRpc(rpc, profile);
   const desiredTier = getDesiredTierWithHysteresis(rpc, currentTier, profile, tierOrder);
   const blockedByHysteresis = rawTier !== currentTier && desiredTier === currentTier;
+  const demotion = isDemotion(currentTier, desiredTier, tierOrder);
   const pState = ensureProfileState(state, profileKey);
+  const dryRun = CFG.isProfileDryRun(profile);
 
   const summary = {
     profileKey,
@@ -732,8 +933,24 @@ async function evaluateBatchMove({ profileKey, destinationId, destinationName, b
     rawTier,
     desiredTier,
     batchSize: batch?.length || CFG.BATCH_SIZE,
-    dryRun: CFG.DRY_RUN,
+    dryRun,
   };
+
+  // Ringba parity: do not demote on an all-zero revenue batch (often lagging payouts).
+  if (
+    demotion &&
+    CFG.SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC &&
+    rpc === 0 &&
+    batchRevenueAllZero(batch)
+  ) {
+    await appendEvent({
+      type: "eval_skipped",
+      reason: "insufficient_revenue_data",
+      ...summary,
+    });
+    console.log("[callgrid-ring-tree] skip demotion — unconfirmed zero RPC", summary);
+    return { action: "skipped", reason: "insufficient_revenue_data", ...summary };
+  }
 
   if (desiredTier === currentTier) {
     await appendEvent({ type: "eval_no_move", ...summary, blockedByHysteresis });
@@ -753,25 +970,71 @@ async function evaluateBatchMove({ profileKey, destinationId, destinationName, b
     currentTier,
     desiredTier,
     rpc,
-    dryRun: CFG.DRY_RUN,
+    dryRun,
     profileKey,
   });
 
-  await appendEvent({ type: CFG.DRY_RUN ? "dry_run_move" : "move_stubbed", ...summary, movePlan });
-  console.log("[callgrid-ring-tree]", slackMessage);
-  console.log("[callgrid-ring-tree] intended write", JSON.stringify(movePlan));
-  await slackService.sendCallGridRingTreeSlackMessage(slackMessage);
+  if (!pState.lastMoveAt) pState.lastMoveAt = {};
+  pState.lastMoveAt[destinationId] = new Date().toISOString();
 
-  if (!CFG.DRY_RUN) {
-    console.warn("[callgrid-ring-tree] DRY_RUN is false but CallGrid PATCH is not implemented yet — no live move.");
+  if (dryRun) {
+    await appendEvent({ type: "dry_run_move", ...summary, movePlan });
+    console.log("[callgrid-ring-tree]", slackMessage);
+    console.log("[callgrid-ring-tree] intended write", JSON.stringify(movePlan));
+    await slackService.sendCallGridRingTreeSlackMessage(slackMessage);
+    return {
+      action: "dry_run_move",
+      message: slackMessage,
+      ...summary,
+      demotion,
+      movePlan,
+    };
   }
 
+  let writeResult = null;
+  try {
+    writeResult = await applyLiveDestinationMove({
+      campaign,
+      destinationId,
+      fromGroupName: currentTier,
+      toGroupName: desiredTier,
+      weight: located.weight ?? 1,
+      priority: located.priority ?? 1,
+    });
+  } catch (err) {
+    await appendEvent({
+      type: "move_failed",
+      ...summary,
+      movePlan,
+      error: err.message,
+      details: err.details || null,
+    });
+    console.error("[callgrid-ring-tree] live move failed", err.message, err.details || "");
+    await slackService.sendCallGridRingTreeSlackMessage(
+      `[FAILED] ${slackMessage} — ${err.message}`
+    );
+    return {
+      action: "move_failed",
+      message: slackMessage,
+      error: err.message,
+      ...summary,
+      demotion,
+      movePlan,
+    };
+  }
+
+  await appendEvent({ type: "live_move", ...summary, movePlan, writeResult });
+  console.log("[callgrid-ring-tree]", slackMessage);
+  console.log("[callgrid-ring-tree] live write", JSON.stringify(writeResult));
+  await slackService.sendCallGridRingTreeSlackMessage(slackMessage);
+
   return {
-    action: CFG.DRY_RUN ? "dry_run_move" : "write_not_implemented",
+    action: "live_move",
     message: slackMessage,
     ...summary,
-    demotion: isDemotion(currentTier, desiredTier, tierOrder),
+    demotion,
     movePlan,
+    writeResult,
   };
 }
 
@@ -931,7 +1194,7 @@ async function listMedicareGroups() {
   const snapshot = buildTierSnapshot(campaign, profile, destNameById);
   return {
     ok: true,
-    dryRun: CFG.DRY_RUN,
+    dryRun: CFG.isProfileDryRun(profile),
     ...snapshot,
     rpcRules: CFG.getProfileRpcRules(profile),
     hysteresis: CFG.getProfileHysteresis(profile),
@@ -973,13 +1236,14 @@ async function getStatus(profileKeyFilter) {
   return {
     ok: true,
     dryRun: CFG.DRY_RUN,
-    writeImplemented: false,
+    writeImplemented: true,
     batchSize: CFG.BATCH_SIZE,
     enabledProfiles: CFG.getEnabledProfiles().map((p) => ({
       key: p.key,
       label: p.label,
       campaignId: p.campaignId,
       planId: p.planId || null,
+      dryRun: CFG.isProfileDryRun(p),
     })),
     destinationCount: destinations.length,
     destinations,
@@ -990,12 +1254,19 @@ function getHealthPayload() {
   return {
     ok: true,
     dryRun: CFG.DRY_RUN,
-    writeImplemented: false,
+    writeImplemented: true,
     batchSize: CFG.BATCH_SIZE,
+    skipDemotionOnUnconfirmedZeroRpc: CFG.SKIP_DEMOTION_ON_UNCONFIRMED_ZERO_RPC,
+    dailyBatchResetEnabled: CFG.DAILY_BATCH_RESET_ENABLED,
+    dailyBatchResetHour: CFG.DAILY_BATCH_RESET_HOUR,
+    dailyBatchResetTimezone: CFG.DAILY_BATCH_RESET_TIMEZONE,
     hasApiKey: Boolean(CFG.getApiKey()),
     hasSlackWebhook: Boolean(CFG.SLACK_WEBHOOK_URL),
     startupDiscover: CFG.STARTUP_DISCOVER,
-    enabledProfiles: CFG.getEnabledProfiles().map((p) => p.key),
+    enabledProfiles: CFG.getEnabledProfiles().map((p) => ({
+      key: p.key,
+      dryRun: CFG.isProfileDryRun(p),
+    })),
   };
 }
 
@@ -1008,6 +1279,8 @@ function listProfilesConfig() {
     campaignId: p.campaignId || null,
     planId: p.planId || null,
     campaignName: p.campaignName || null,
+    tierGroupNames: Array.isArray(p.tierGroupNames) ? p.tierGroupNames : null,
+    dryRun: CFG.isProfileDryRun(p),
   }));
 }
 
@@ -1081,6 +1354,64 @@ async function resetState(profileKey) {
   return { ok: true, reset: true, profileKey: profileKey || "all" };
 }
 
+/**
+ * Clear in-progress batches (batch + seenCallIds) for all destinations.
+ * Preserves profile lastMoveAt cooldowns. Runs daily at 1am ET by default.
+ * Parity with dynamicRingTreeTargetService.clearAllOpenBatches.
+ */
+async function clearAllOpenBatches(options = {}) {
+  return withStateMutex(async () => {
+    const state = await loadState();
+    let destinationsCleared = 0;
+    let callsCleared = 0;
+    const clearedByProfile = {};
+
+    for (const [pKey, pState] of Object.entries(state.profiles || {})) {
+      if (!pState?.destinations) continue;
+      let profileDestinations = 0;
+      let profileCalls = 0;
+
+      for (const [destinationId, dState] of Object.entries(pState.destinations)) {
+        const batchLen = dState.batch?.length || 0;
+        const seenLen = dState.seenCallIds?.length || 0;
+        if (batchLen === 0 && seenLen === 0) continue;
+
+        profileCalls += batchLen;
+        profileDestinations += 1;
+        delete pState.destinations[destinationId];
+      }
+
+      if (profileDestinations > 0) {
+        clearedByProfile[pKey] = {
+          destinationsCleared: profileDestinations,
+          callsCleared: profileCalls,
+        };
+        destinationsCleared += profileDestinations;
+        callsCleared += profileCalls;
+      }
+    }
+
+    await saveState(state);
+
+    const summary = {
+      ok: true,
+      destinationsCleared,
+      callsCleared,
+      clearedByProfile,
+      trigger: options.trigger || "manual",
+    };
+
+    if (destinationsCleared > 0 || options.trigger) {
+      await appendEvent({
+        type: "batch_daily_reset",
+        ...summary,
+      });
+    }
+
+    return summary;
+  });
+}
+
 module.exports = {
   verifyAuth,
   discoverAllCampaigns,
@@ -1094,5 +1425,6 @@ module.exports = {
   simulateSingle,
   simulateBatch,
   resetState,
+  clearAllOpenBatches,
   parseIngestParams,
 };
