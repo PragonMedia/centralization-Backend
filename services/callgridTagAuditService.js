@@ -7,11 +7,11 @@
  *   - gtg === "1"
  *   - clickid missing
  *
- * Required tags by channel:
- *   - PN          → angle, channel, key  (no adaccount)
- *   - contains TV → angle
- *   - FE          → channel, key
- *   - default     → angle, channel, adaccount, key
+ * Required tags by channel / campaign:
+ *   - PN                              → angle, channel, key  (no adaccount)
+ *   - channel contains TV             → angle
+ *   - campaign contains Final Expense → channel, key
+ *   - default                         → angle, channel, adaccount, key
  */
 const { sendSlackMessage } = require("./slackService");
 
@@ -91,8 +91,9 @@ function isTvChannel(channel) {
   return normalizeChannel(channel).includes("tv");
 }
 
-function isFeChannel(channel) {
-  return normalizeChannel(channel) === "fe";
+function isFinalExpenseCampaign(campaign) {
+  if (campaign == null) return false;
+  return String(campaign).trim().toLowerCase().includes("final expense");
 }
 
 function isGtgSkip(value) {
@@ -102,8 +103,9 @@ function isGtgSkip(value) {
 
 function getRequiredFields(payload) {
   if (isPnChannel(payload?.channel)) return [...PN_REQUIRED_FIELDS];
+  // Campaign vertical wins over channel TV heuristics.
+  if (isFinalExpenseCampaign(payload?.campaign)) return [...FE_REQUIRED_FIELDS];
   if (isTvChannel(payload?.channel)) return [...TV_REQUIRED_FIELDS];
-  if (isFeChannel(payload?.channel)) return [...FE_REQUIRED_FIELDS];
   return [...DEFAULT_REQUIRED_FIELDS];
 }
 
@@ -158,7 +160,7 @@ async function handleTagAudit(query = {}, body = {}) {
   const payload = extractPayload(query, body);
   const pnChannel = isPnChannel(payload.channel);
   const tvChannel = isTvChannel(payload.channel);
-  const feChannel = isFeChannel(payload.channel);
+  const feCampaign = isFinalExpenseCampaign(payload.campaign);
   const gtgSkip = isGtgSkip(payload.gtg);
   const clickidMissing = isMissing(payload.clickid);
   const phoneMissing = isMissing(payload.phoneNumber);
@@ -167,7 +169,7 @@ async function handleTagAudit(query = {}, body = {}) {
   const baseMeta = {
     pnChannel,
     tvChannel,
-    feChannel,
+    feCampaign,
     gtg: payload.gtg ?? null,
     campaign: payload.campaign ?? null,
     phoneNumber: payload.phoneNumber ?? null,
@@ -277,7 +279,7 @@ module.exports = {
   isMissing,
   isPnChannel,
   isTvChannel,
-  isFeChannel,
+  isFinalExpenseCampaign,
   getRequiredFields,
   formatMissingList,
   buildSlackMessage,
