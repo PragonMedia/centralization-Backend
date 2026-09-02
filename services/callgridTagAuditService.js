@@ -1,22 +1,31 @@
 /**
  * CallGrid tag-audit pixel — alert Slack when required call tags are missing.
  * POST /webhooks/callgrid/tag-audit
+ *
+ * Gates (ignore entirely):
+ *   - phoneNumber or mb missing
+ *   - gtg === "1"
+ *   - clickid missing
+ *
+ * Required tags by channel:
+ *   - PN          → angle, channel, key  (no adaccount)
+ *   - contains TV → angle
+ *   - FE          → channel, key
+ *   - default     → angle, channel, adaccount, key
  */
 const { sendSlackMessage } = require("./slackService");
 
-const REQUIRED_FIELDS = ["angle", "channel", "qualified", "adaccount", "key"];
-/** CTV / Containers TV: only require channel + angle (case-insensitive match). */
-const CTV_CHANNEL_VALUES = new Set(["containers tv", "tv"]);
-const CTV_REQUIRED_FIELDS = ["channel", "angle"];
-/** Final Expense campaign: only require channel. */
-const FE_REQUIRED_FIELDS = ["channel"];
+const DEFAULT_REQUIRED_FIELDS = ["angle", "channel", "adaccount", "key"];
+const PN_REQUIRED_FIELDS = ["angle", "channel", "key"];
+const TV_REQUIRED_FIELDS = ["angle"];
+const FE_REQUIRED_FIELDS = ["channel", "key"];
 
 const FIELD_ALIASES = {
   angle: ["angle"],
   channel: ["channel"],
-  qualified: ["qualified"],
   adaccount: ["adaccount", "adAccount", "ad_account", "account"],
   key: ["key"],
+  clickid: ["clickid", "clickId", "click_id"],
   phoneNumber: [
     "phoneNumber",
     "phone_number",
@@ -44,7 +53,6 @@ function pickFirst(source, keys) {
       return source[key];
     }
   }
-  // case-insensitive fallback
   const lowerMap = Object.create(null);
   for (const [k, v] of Object.entries(source)) {
     lowerMap[String(k).toLowerCase()] = v;
@@ -75,34 +83,28 @@ function normalizeChannel(value) {
   return String(value).trim().toLowerCase();
 }
 
-function isCtvChannel(channel) {
-  return CTV_CHANNEL_VALUES.has(normalizeChannel(channel));
-}
-
 function isPnChannel(channel) {
   return normalizeChannel(channel) === "pn";
 }
 
-function isFinalExpenseCampaign(campaign) {
-  if (campaign == null) return false;
-  return String(campaign).trim().toLowerCase().includes("final expense");
+function isTvChannel(channel) {
+  return normalizeChannel(channel).includes("tv");
 }
 
-function getRequiredFields(payload) {
-  // FE campaign: only channel (takes precedence over CTV relaxed rules).
-  if (isFinalExpenseCampaign(payload?.campaign)) {
-    return [...FE_REQUIRED_FIELDS];
-  }
-  if (isCtvChannel(payload?.channel)) {
-    return [...CTV_REQUIRED_FIELDS];
-  }
-  return [...REQUIRED_FIELDS];
+function isFeChannel(channel) {
+  return normalizeChannel(channel) === "fe";
 }
 
 function isGtgSkip(value) {
   if (value == null) return false;
-  const s = String(value).trim();
-  return s === "1";
+  return String(value).trim() === "1";
+}
+
+function getRequiredFields(payload) {
+  if (isPnChannel(payload?.channel)) return [...PN_REQUIRED_FIELDS];
+  if (isTvChannel(payload?.channel)) return [...TV_REQUIRED_FIELDS];
+  if (isFeChannel(payload?.channel)) return [...FE_REQUIRED_FIELDS];
+  return [...DEFAULT_REQUIRED_FIELDS];
 }
 
 function formatMissingList(fields) {
@@ -112,9 +114,7 @@ function formatMissingList(fields) {
 }
 
 function buildSlackMessage({ phoneNumber, mb, missing }) {
-  const phone = phoneNumber || "unknown";
-  const buyer = mb || "unknown";
-  return `Call ${phone} from ${buyer} does not contain ${formatMissingList(missing)}`;
+  return `Call ${phoneNumber} from ${mb} does not contain ${formatMissingList(missing)}`;
 }
 
 function extractPayload(query = {}, body = {}) {
@@ -123,7 +123,6 @@ function extractPayload(query = {}, body = {}) {
       ? { ...(query || {}), ...body }
       : { ...(query || {}) };
 
-  // Nested tags object (CallGrid sometimes nests custom tags)
   const tags =
     (merged.tags && typeof merged.tags === "object" ? merged.tags : null) ||
     (merged.Tags && typeof merged.Tags === "object" ? merged.Tags : null) ||
@@ -150,34 +149,71 @@ function getSlackWebhookUrl() {
  */
 async function handleTagAudit(query = {}, body = {}) {
   const payload = extractPayload(query, body);
-  const feRelaxed = isFinalExpenseCampaign(payload.campaign);
   const pnChannel = isPnChannel(payload.channel);
-  const ctvRelaxed = !feRelaxed && isCtvChannel(payload.channel);
+  const tvChannel = isTvChannel(payload.channel);
+  const feChannel = isFeChannel(payload.channel);
   const gtgSkip = isGtgSkip(payload.gtg);
+  const clickidMissing = isMissing(payload.clickid);
+  const phoneMissing = isMissing(payload.phoneNumber);
+  const mbMissing = isMissing(payload.mb);
 
   const baseMeta = {
-    feRelaxed,
     pnChannel,
-    ctvRelaxed,
+    tvChannel,
+    feChannel,
     gtg: payload.gtg ?? null,
     campaign: payload.campaign ?? null,
     phoneNumber: payload.phoneNumber ?? null,
     mb: payload.mb ?? null,
+    clickid: payload.clickid ?? null,
   };
 
-  // channel === PN: ignore entirely — no tag checks, no Slack.
-  if (pnChannel) {
-    console.log("[callgrid-tag-audit] skip Slack (channel=PN)", {
-      phoneNumber: payload.phoneNumber ?? null,
-      mb: payload.mb ?? null,
+  if (phoneMissing || mbMissing) {
+    console.log("[callgrid-tag-audit] skip Slack (phone/mb missing)", {
+      phoneMissing,
+      mbMissing,
     });
     return {
       ok: true,
-      status: "ignored_pn_channel",
+      status: "ignored_missing_identity",
       missing: [],
       message: null,
       notified: false,
       gtgSkip,
+      requiredFields: [],
+      ...baseMeta,
+    };
+  }
+
+  if (gtgSkip) {
+    console.log("[callgrid-tag-audit] skip Slack (gtg=1)", {
+      phoneNumber: payload.phoneNumber,
+      mb: payload.mb,
+    });
+    return {
+      ok: true,
+      status: "ignored_gtg",
+      missing: [],
+      message: null,
+      notified: false,
+      gtgSkip: true,
+      requiredFields: [],
+      ...baseMeta,
+    };
+  }
+
+  if (clickidMissing) {
+    console.log("[callgrid-tag-audit] skip Slack (clickid missing)", {
+      phoneNumber: payload.phoneNumber,
+      mb: payload.mb,
+    });
+    return {
+      ok: true,
+      status: "ignored_missing_clickid",
+      missing: [],
+      message: null,
+      notified: false,
+      gtgSkip: false,
       requiredFields: [],
       ...baseMeta,
     };
@@ -194,29 +230,14 @@ async function handleTagAudit(query = {}, body = {}) {
       missing: [],
       message: null,
       notified: false,
-      gtgSkip,
+      gtgSkip: false,
       ...baseMeta,
     };
   }
 
-  const message = buildSlackMessage({
-    phoneNumber: isMissing(payload.phoneNumber) ? "unknown" : String(payload.phoneNumber).trim(),
-    mb: isMissing(payload.mb) ? "unknown" : String(payload.mb).trim(),
-    missing,
-  });
-
-  if (gtgSkip) {
-    console.log("[callgrid-tag-audit] skip Slack (gtg=1)", message);
-    return {
-      ok: true,
-      status: "missing_tags_skipped_gtg",
-      missing,
-      message,
-      notified: false,
-      gtgSkip: true,
-      ...baseMeta,
-    };
-  }
+  const phoneNumber = String(payload.phoneNumber).trim();
+  const mb = String(payload.mb).trim();
+  const message = buildSlackMessage({ phoneNumber, mb, missing });
 
   let notified = false;
   try {
@@ -240,16 +261,16 @@ async function handleTagAudit(query = {}, body = {}) {
 }
 
 module.exports = {
-  REQUIRED_FIELDS,
-  CTV_REQUIRED_FIELDS,
+  DEFAULT_REQUIRED_FIELDS,
+  PN_REQUIRED_FIELDS,
+  TV_REQUIRED_FIELDS,
   FE_REQUIRED_FIELDS,
-  CTV_CHANNEL_VALUES,
   handleTagAudit,
   extractPayload,
   isMissing,
-  isCtvChannel,
   isPnChannel,
-  isFinalExpenseCampaign,
+  isTvChannel,
+  isFeChannel,
   getRequiredFields,
   formatMissingList,
   buildSlackMessage,

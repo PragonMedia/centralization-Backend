@@ -2,7 +2,7 @@ const callgridTagAuditService = require("../services/callgridTagAuditService");
 
 /**
  * CallGrid pixel: POST (also accepts GET for easy browser/pixel tests).
- * Body/query: angle, channel, qualified, adaccount, key, phoneNumber, mb
+ * Body/query: angle, channel, adaccount, key, clickid, phoneNumber, mb, gtg
  */
 async function handleTagAudit(req, res) {
   try {
