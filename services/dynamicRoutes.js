@@ -337,6 +337,15 @@ async function generateNginxConfig(domainRecord = null) {
             `\n📝 Generated nginx config for ${record.domain} (manual application needed):`
           );
           console.log(`\n${fragment}\n`);
+          const noSpace =
+            err.code === "ENOSPC" ||
+            /no space left on device/i.test(String(err.message || ""));
+          return {
+            success: false,
+            warning: noSpace
+              ? `Disk full (ENOSPC) while writing nginx config for ${record.domain}`
+              : `Failed to write nginx config for ${record.domain}: ${err.message}`,
+          };
         }
       }
 

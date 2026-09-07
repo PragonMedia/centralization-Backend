@@ -865,11 +865,14 @@ exports.createRoute = async (req, res) => {
       `📋 Domain has ${refreshedDomainDoc.routes?.length || 0} routes total`
     );
 
+    let nginxVerified = false;
+    let nginxErrorMessage = null;
     try {
       const nginxResult = await generateNginxConfig(refreshedDomainDoc);
 
       // Check if generateNginxConfig returned an error
       if (nginxResult && nginxResult.warning) {
+        nginxErrorMessage = nginxResult.warning;
         console.error(
           `❌ Nginx config generation returned warning: ${nginxResult.warning}`
         );
@@ -892,36 +895,47 @@ exports.createRoute = async (req, res) => {
           configContent.includes(`location`) &&
           routePattern.test(configContent)
         ) {
+          nginxVerified = true;
           console.log(
             `✅ Nginx config regenerated and verified for ${refreshedDomainDoc.domain} (route /${route} found in config)`
           );
         } else {
+          nginxErrorMessage =
+            nginxErrorMessage ||
+            `Nginx config exists but route /${route} is missing from ${configPath}`;
           console.error(
             `❌ WARNING: Nginx config file exists but route /${route} is NOT in the config!`
-          );
-          console.error(
-            `⚠️  Route created but Nginx config is missing the route - manual regeneration required`
           );
           console.error(`📝 Config file size: ${configContent.length} bytes`);
           console.error(`📝 Looking for route pattern: /${route}`);
         }
       } else {
+        nginxErrorMessage =
+          nginxErrorMessage || `Nginx config file was NOT created: ${configPath}`;
         console.error(
           `❌ WARNING: Nginx config file was NOT created: ${configPath}`
         );
-        console.error(
-          `⚠️  Route created but Nginx config file is missing - manual regeneration required`
-        );
       }
     } catch (nginxErr) {
+      nginxErrorMessage = nginxErr.message;
       console.error(
         `❌ Failed to regenerate nginx config: ${nginxErr.message}`
       );
       console.error(`❌ Nginx error stack: ${nginxErr.stack}`);
-      // Don't fail the route creation if nginx config fails - log error but continue
-      console.warn(
-        `⚠️  Route created but nginx config generation failed - manual regeneration required`
-      );
+    }
+
+    // Route is saved in Mongo, but without nginx the live URL 404s.
+    // Fail the request so create flow matches the old working expectation.
+    if (!nginxVerified) {
+      return res.status(500).json({
+        error: "Route saved but nginx config was not applied.",
+        details:
+          nginxErrorMessage ||
+          "Nginx regeneration failed or could not verify the new route. Live page will 404 until nginx is regenerated.",
+        domain: domainDoc.domain,
+        route: newRoute.route,
+        nginxVerified: false,
+      });
     }
 
     res.status(201).json({
@@ -929,6 +943,7 @@ exports.createRoute = async (req, res) => {
       domain: domainDoc.domain,
       route: newRoute.route,
       organization: newRoute.organization,
+      nginxVerified: true,
     });
   } catch (err) {
     console.error(err);
