@@ -4,6 +4,7 @@ const dynamicRingTreeTargetController = require("../controllers/dynamicRingTreeT
 const ringbaFakeTargetPingController = require("../controllers/ringbaFakeTargetPingController");
 const callgridRingTreeTargetController = require("../controllers/callgridRingTreeTargetController");
 const callgridTagAuditController = require("../controllers/callgridTagAuditController");
+const callgridGtgBlockController = require("../controllers/callgridGtgBlockController");
 
 const router = express.Router();
 
@@ -49,6 +50,10 @@ router.post("/callgrid/tier-rpc/fe", callgridRingTreeTargetController.handleWebh
 // CallGrid tag completeness pixel — Slack when angle/channel/qualified/adaccount/key missing
 router.post("/callgrid/tag-audit", callgridTagAuditController.handleTagAudit);
 router.get("/callgrid/tag-audit", callgridTagAuditController.handleTagAudit);
+
+// CallGrid GTG block pixel — POST /api/blocked when gtg=1; ignore otherwise
+router.post("/callgrid/gtg-block", callgridGtgBlockController.handleGtgBlock);
+router.get("/callgrid/gtg-block", callgridGtgBlockController.handleGtgBlock);
 
 module.exports = router;
 
